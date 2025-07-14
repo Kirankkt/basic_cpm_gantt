@@ -16,7 +16,7 @@ st.set_page_config(
 initialize_database()
 
 # --- 3. Display App Title and Welcome Message ---
-st.title("🏗️ Collaborative Renovation Project Hub")
+st.title("🏗️ Collaborative Renovation Project Hub I")
 st.markdown("""
 Welcome! This is your central hub for managing the renovation project.
 All data is **saved to a persistent database** when you press the calculate button.
