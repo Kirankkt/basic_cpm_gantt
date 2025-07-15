@@ -109,8 +109,10 @@ def create_network_diagram(df):
 
     fig = go.Figure(data=[edge_trace, node_trace],
                  layout=go.Layout(
-                    title='<br>CPM Network Diagram',
-                    titlefont_size=16,
+                    title=dict(
+                        text='<br>CPM Network Diagram',
+                        font=dict(size=16)
+                    ),
                     showlegend=False,
                     hovermode='closest',
                     margin=dict(b=20,l=5,r=5,t=40),
