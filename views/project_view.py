@@ -36,20 +36,22 @@ def create_gantt_chart(df, start_date):
     fig.update_yaxes(autorange="reversed")
     return fig
 
-# --- NEW: Network Diagram Logic ---
+# --- Network Diagram Logic ---
 def create_network_diagram(df):
     """
     Creates a CPM network diagram using NetworkX and Plotly.
     """
     G = nx.DiGraph()
-    for index, row in df.iterrows():
-        G.add_node(row['Task ID'])
+    # Ensure all tasks from the dataframe are nodes in the graph
+    for task_id in df['Task ID']:
+        G.add_node(task_id)
 
     for index, row in df.iterrows():
         if row['Predecessors']:
             predecessors = [p.strip() for p in row['Predecessors'].split(',')]
             for p_task in predecessors:
                 if p_task:
+                    # Networkx will automatically add p_task as a node if it doesn't exist
                     G.add_edge(p_task, row['Task ID'])
 
     pos = nx.spring_layout(G, k=0.9, iterations=50)
@@ -76,21 +78,35 @@ def create_network_diagram(df):
         x, y = pos[node]
         node_x.append(x)
         node_y.append(y)
-        node_text.append(node)
-        is_critical = df[df['Task ID'] == node]['On Critical Path?'].iloc[0]
-        node_color.append('red' if is_critical == 'Yes' else 'skyblue')
+        node_text.append(f"Task: {node}")
+        
+        # --- THIS IS THE FIX ---
+        # Check if the node from the graph exists in the dataframe
+        task_info = df[df['Task ID'] == node]
+        if not task_info.empty:
+            # If it exists, color it based on whether it's on the critical path
+            is_critical = task_info['On Critical Path?'].iloc[0]
+            node_color.append('red' if is_critical == 'Yes' else 'skyblue')
+        else:
+            # If it's a "phantom" node (a predecessor that's not a task), color it grey
+            node_color.append('grey')
+            node_text[-1] += " (Missing)" # Add a note to the hover text
+
 
     node_trace = go.Scatter(
         x=node_x, y=node_y,
         mode='markers+text',
-        text=node_text,
-        textposition="top center",
+        text=[f"<b>{t.split(' ')[1]}</b>" for t in node_text], # Display just the Task ID on the node
+        textposition="middle center",
+        hovertext=node_text, # Show full info on hover
         hoverinfo='text',
         marker=dict(
             showscale=False,
             color=node_color,
-            size=20,
-            line_width=2))
+            size=35,
+            line=dict(color='Black', width=1)
+            )
+        )
 
     fig = go.Figure(data=[edge_trace, node_trace],
                  layout=go.Layout(
@@ -151,6 +167,11 @@ def show_project_view():
 
     if st.button("Calculate & Save Project Plan", type="primary"):
         if edited_df is not None:
+            # Basic validation to prevent errors
+            if edited_df['Task ID'].isnull().any() or "" in edited_df['Task ID'].values:
+                st.error("Error: 'Task ID' cannot be empty. Please provide an ID for all tasks.")
+                return
+
             save_project_data_to_db(edited_df, project_id=1)
             cpm_df = calculate_cpm(edited_df.copy())
 
@@ -162,7 +183,7 @@ def show_project_view():
             fig = create_gantt_chart(cpm_df, start_date)
             st.plotly_chart(fig, use_container_width=True)
             
-            # --- ADDED THIS SECTION FOR THE NETWORK DIAGRAM ---
             st.subheader("CPM Network Diagram")
             network_fig = create_network_diagram(cpm_df)
-            st.plotly_chart(network_fig, use_container_width=True)
+            st.plotly_chart(network_fig, use_container_width=True)```
+
