@@ -64,8 +64,6 @@ def create_network_diagram(df):
         for node, (x, y) in pos.items():
             pos[node] = (x, y - y_center)
 
-    # --- ARROW LOGIC ---
-    # We will now use annotations to draw arrows instead of a separate line trace.
     arrow_annotations = []
     for edge in G.edges():
         if edge[0] in pos and edge[1] in pos:
@@ -79,7 +77,8 @@ def create_network_diagram(df):
                     arrowhead=3,
                     arrowsize=2,
                     arrowwidth=1.5,
-                    arrowcolor='#888'
+                    arrowcolor='#888',
+                    standoff=25  # THIS IS THE FIX: Pulls the arrow tip back from the node center
                 ))
             )
 
@@ -110,7 +109,6 @@ def create_network_diagram(df):
         marker=dict(color=node_color, size=45, line=dict(color='Black', width=2))
     )
     
-    # Add the arrow annotations to the layout
     layout = go.Layout(
         title=dict(text='<br>CPM Network Diagram', font=dict(size=16)),
         showlegend=False,
@@ -118,7 +116,7 @@ def create_network_diagram(df):
         margin=dict(b=20, l=5, r=5, t=40),
         xaxis=dict(title='Project Timeline (Days)', showgrid=True, zeroline=False, showticklabels=True),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        annotations=arrow_annotations  # This is the key addition
+        annotations=arrow_annotations
     )
 
     fig = go.Figure(data=[node_trace], layout=layout)
