@@ -12,6 +12,84 @@ from database import get_project_data_from_db, save_project_data_to_db, import_d
 from cpm_logic import calculate_cpm
 from utils import get_sample_data
 
+# --- Main View Function ---
+def show_project_view():
+    st.header("1. Project Setup")
+
+    # --- Initialize Session State ---
+    # This is the key to robust state management.
+    if 'project_df' not in st.session_state:
+        st.session_state.project_df = get_project_data_from_db(project_id=1)
+
+    # --- UI Elements ---
+    start_date = st.date_input("Select Project Start Date", value=date.today())
+    st.subheader("Import Project Plan")
+    st.info("Upload an Excel or CSV file with columns: 'Task ID', 'Task Description', 'Predecessors', 'Duration'.")
+    uploaded_file = st.file_uploader("Choose a file", type=['csv', 'xlsx'], key="file_uploader")
+
+    # --- File Upload Logic ---
+    if uploaded_file:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
+            
+            import_df_to_db(df, project_id=1)
+            # CRITICAL FIX: Immediately update the session state with the new data
+            st.session_state.project_df = get_project_data_from_db(project_id=1)
+            st.success("File uploaded and project data refreshed!")
+            # We use st.rerun() to clear the file uploader and show the new table cleanly.
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
+
+    # --- Load Sample Data Logic ---
+    if st.button("Load Sample Project Data"):
+        import_df_to_db(get_sample_data(), project_id=1)
+        # CRITICAL FIX: Immediately update the session state
+        st.session_state.project_df = get_project_data_from_db(project_id=1)
+        st.success("Sample data loaded!")
+        st.rerun()
+
+    st.divider()
+
+    # --- Data Editor and Calculation ---
+    st.header("2. Task Planning")
+    st.markdown("Edit tasks below. Press 'Calculate & Save' to update the project plan.")
+
+    # Always use the session_state dataframe for the editor
+    if st.session_state.project_df.empty:
+        st.warning("No project data found. Load sample data or upload a file to begin.")
+        return
+
+    # The data editor now edits the dataframe held in session state
+    edited_df = st.data_editor(st.session_state.project_df, num_rows="dynamic", use_container_width=True)
+
+    if st.button("Calculate & Save Project Plan", type="primary"):
+        if edited_df is not None:
+            # Save the latest edits from the screen
+            save_project_data_to_db(edited_df, project_id=1)
+            # Update session state to ensure consistency
+            st.session_state.project_df = edited_df.copy()
+            
+            cpm_df = calculate_cpm(st.session_state.project_df.copy())
+
+            st.header("3. Results")
+            st.subheader("Critical Path Analysis")
+            st.dataframe(cpm_df)
+
+            st.subheader("Gantt Chart")
+            fig = create_gantt_chart(cpm_df, start_date)
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.subheader("CPM Network Diagram")
+            network_fig = create_network_diagram(cpm_df)
+            st.plotly_chart(network_fig, use_container_width=True)
+
+
+# --- (No changes to Gantt Chart or Network Diagram functions) ---
 def create_gantt_chart(df, start_date):
     gantt_df = df.copy()
     project_start_date = pd.to_datetime(start_date)
@@ -30,24 +108,17 @@ def create_gantt_chart(df, start_date):
     fig.update_yaxes(autorange="reversed")
     return fig
 
-# --- UPDATED Network Diagram Logic ---
 def create_network_diagram(df):
-    """
-    Creates a CPM network diagram with a traditional left-to-right layout and arrows.
-    """
     G = nx.DiGraph()
     df['Predecessors'] = df['Predecessors'].astype(str).fillna('')
-
     for task_id in df['Task ID']:
         G.add_node(task_id)
-
     for index, row in df.iterrows():
         if row['Predecessors']:
             predecessors = [p.strip() for p in re.split(r'[,.\s;]+', row['Predecessors']) if p]
             for p_task in predecessors:
                 if p_task:
                     G.add_edge(p_task, row['Task ID'])
-
     pos = {}
     y_positions = {}
     for index, row in df.iterrows():
@@ -56,14 +127,12 @@ def create_network_diagram(df):
         y_level = y_positions.get(es, 0)
         pos[task_id] = (es, y_level)
         y_positions[es] = y_level - 1.5
-
     if pos:
         max_y = max(p[1] for p in pos.values())
         min_y = min(p[1] for p in pos.values())
         y_center = (max_y + min_y) / 2
         for node, (x, y) in pos.items():
             pos[node] = (x, y - y_center)
-
     arrow_annotations = []
     for edge in G.edges():
         if edge[0] in pos and edge[1] in pos:
@@ -73,22 +142,16 @@ def create_network_diagram(df):
                 go.layout.Annotation(dict(
                     ax=x0, ay=y0, x=x1, y=y1,
                     xref='x', yref='y', axref='x', ayref='y',
-                    showarrow=True,
-                    arrowhead=3,
-                    arrowsize=2,
-                    arrowwidth=1.5,
-                    arrowcolor='#888',
-                    standoff=25  # THIS IS THE FIX: Pulls the arrow tip back from the node center
+                    showarrow=True, arrowhead=3, arrowsize=2, arrowwidth=1.5, arrowcolor='#888',
+                    standoff=25
                 ))
             )
-
     node_x, node_y, node_text, node_color = [], [], [], []
     for node in G.nodes():
         if node in pos:
             x, y = pos[node]
             node_x.append(x)
             node_y.append(y)
-            
             task_info = df[df['Task ID'] == node]
             if not task_info.empty:
                 is_critical = task_info['On Critical Path?'].iloc[0]
@@ -97,78 +160,18 @@ def create_network_diagram(df):
             else:
                 node_color.append('grey')
                 node_text.append(f"Task: {node} (Missing)")
-
     node_trace = go.Scatter(
-        x=node_x, y=node_y,
-        mode='markers+text',
-        text=[f"<b>{node}</b>" for node in G.nodes() if node in pos],
-        textposition="middle center",
-        hovertext=node_text,
-        hoverinfo='text',
+        x=node_x, y=node_y, mode='markers+text', text=[f"<b>{node}</b>" for node in G.nodes() if node in pos],
+        textposition="middle center", hovertext=node_text, hoverinfo='text',
         textfont=dict(color='white', size=12),
         marker=dict(color=node_color, size=45, line=dict(color='Black', width=2))
     )
-    
     layout = go.Layout(
         title=dict(text='<br>CPM Network Diagram', font=dict(size=16)),
-        showlegend=False,
-        hovermode='closest',
-        margin=dict(b=20, l=5, r=5, t=40),
+        showlegend=False, hovermode='closest', margin=dict(b=20, l=5, r=5, t=40),
         xaxis=dict(title='Project Timeline (Days)', showgrid=True, zeroline=False, showticklabels=True),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         annotations=arrow_annotations
     )
-
     fig = go.Figure(data=[node_trace], layout=layout)
     return fig
-
-# --- Main View Function ---
-def show_project_view():
-    st.header("1. Project Setup")
-    start_date = st.date_input("Select Project Start Date", value=date.today())
-    st.subheader("Import Project Plan")
-    st.info("Upload an Excel or CSV file with columns: 'Task ID', 'Task Description', 'Predecessors', 'Duration'.")
-    uploaded_file = st.file_uploader("Choose a file", type=['csv', 'xlsx'])
-
-    if uploaded_file:
-        try:
-            df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            import_df_to_db(df, project_id=1)
-            st.success("File uploaded and project data imported successfully!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
-
-    if st.button("Load Sample Project Data"):
-        import_df_to_db(get_sample_data(), project_id=1)
-        st.success("Sample data loaded!")
-        st.rerun()
-
-    st.divider()
-    st.header("2. Task Planning")
-    st.markdown("Edit tasks below. Press 'Calculate & Save' to update the project plan.")
-    project_df = get_project_data_from_db(project_id=1)
-    if project_df.empty:
-        st.warning("No project data found. Load sample data or upload a file to begin.")
-        return
-
-    edited_df = st.data_editor(project_df, num_rows="dynamic", use_container_width=True)
-
-    if st.button("Calculate & Save Project Plan", type="primary"):
-        if edited_df is not None:
-            if edited_df['Task ID'].isnull().any() or "" in edited_df['Task ID'].values:
-                st.error("Error: 'Task ID' cannot be empty. Please provide an ID for all tasks.")
-                return
-
-            save_project_data_to_db(edited_df, project_id=1)
-            cpm_df = calculate_cpm(edited_df.copy())
-
-            st.header("3. Results")
-            st.subheader("Critical Path Analysis")
-            st.dataframe(cpm_df)
-            st.subheader("Gantt Chart")
-            fig = create_gantt_chart(cpm_df, start_date)
-            st.plotly_chart(fig, use_container_width=True)
-            st.subheader("CPM Network Diagram")
-            network_fig = create_network_diagram(cpm_df)
-            st.plotly_chart(network_fig, use_container_width=True)
