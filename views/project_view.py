@@ -7,8 +7,7 @@ import plotly.graph_objects as go
 import networkx as nx
 import re
 
-# Updated database function imports
-# THIS LINE IS FIXED
+# Correctly import all necessary functions
 from database import get_all_projects, get_project_data_from_db, save_tasks_to_db, import_df_to_db
 from cpm_logic import calculate_cpm
 from utils import get_sample_data
@@ -21,11 +20,11 @@ def show_project_view():
         uploaded_file = st.session_state.get("file_uploader")
         if uploaded_file:
             try:
-                project_name = uploaded_file.name.rsplit('.', 1)[0] # Use filename as project name
+                project_name = uploaded_file.name.rsplit('.', 1)[0]
                 df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
                 new_project_id = import_df_to_db(df, project_name)
                 
-                # Automatically switch to the new project
+                st.session_state.all_projects = get_all_projects()
                 st.session_state.current_project_id = new_project_id
                 st.session_state.project_df = get_project_data_from_db(new_project_id)
                 st.session_state.cpm_results = None
@@ -35,9 +34,10 @@ def show_project_view():
     
     def switch_project():
         project_name = st.session_state.project_selector
-        st.session_state.current_project_id = st.session_state.all_projects[project_name]
-        st.session_state.project_df = get_project_data_from_db(st.session_state.current_project_id)
-        st.session_state.cpm_results = None # Clear results when switching
+        if project_name:
+            st.session_state.current_project_id = st.session_state.all_projects[project_name]
+            st.session_state.project_df = get_project_data_from_db(st.session_state.current_project_id)
+            st.session_state.cpm_results = None
 
     # --- Initialize Session State ---
     if 'all_projects' not in st.session_state:
@@ -52,21 +52,36 @@ def show_project_view():
     # --- UI ---
     st.header("1. Project Selection & Setup")
     
+    # --- ROBUST Project Dropdown Logic ---
     project_names = list(st.session_state.all_projects.keys())
-    try:
-        current_project_name = [name for name, id in st.session_state.all_projects.items() if id == st.session_state.current_project_id][0]
-        current_index = project_names.index(current_project_name)
-    except (IndexError, ValueError):
-        current_index = 0
-    
+    current_project_name = "No Project Selected" # Safe default value
+    current_index = 0
+    if st.session_state.current_project_id and project_names:
+        try:
+            current_project_name = [name for name, id_ in st.session_state.all_projects.items() if id_ == st.session_state.current_project_id][0]
+            current_index = project_names.index(current_project_name)
+        except (IndexError, ValueError):
+            # This can happen if the current project ID is no longer in the list
+            # Default to the first project
+            if project_names:
+                current_project_name = project_names[0]
+                st.session_state.current_project_id = st.session_state.all_projects[current_project_name]
+
     st.selectbox("Select Project", options=project_names, index=current_index, key="project_selector", on_change=switch_project)
     
     with st.expander("Import New Project or Load Sample"):
         st.file_uploader("Upload Project File (CSV or Excel)", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file)
+        
+        # --- FIXED Load Sample Button Logic ---
         if st.button("Load Sample Project Data (Overwrites 'Default Project')"):
-            import_df_to_db(get_sample_data(), "Default Project")
+            project_name = "Default Project"
+            project_id = import_df_to_db(get_sample_data(), project_name)
             st.session_state.all_projects = get_all_projects()
-            st.success("Sample data loaded into 'Default Project'.")
+            st.session_state.current_project_id = project_id
+            st.session_state.project_df = get_project_data_from_db(project_id)
+            st.session_state.cpm_results = None
+            st.success(f"Sample data loaded into '{project_name}'.")
+            st.rerun()
 
     start_date = st.date_input("Select Project Start Date", value=date.today())
     st.divider()
@@ -90,7 +105,6 @@ def show_project_view():
                 st.error("Validation Failed: Found duplicate 'Task ID's. Please ensure every ID is unique.")
             else:
                 try:
-                    # THIS LINE IS FIXED
                     save_tasks_to_db(edited_df, st.session_state.current_project_id)
                     st.session_state.project_df = edited_df.copy()
                     st.session_state.cpm_results = calculate_cpm(st.session_state.project_df.copy())
@@ -100,6 +114,7 @@ def show_project_view():
                     st.error(f"An unexpected error occurred: {e}")
     
     with col2:
+        # This download button is now safe because current_project_name always has a value
         st.download_button(
             label="Export as CSV",
             data=edited_df.to_csv(index=False).encode('utf-8'),
@@ -142,10 +157,10 @@ def show_project_view():
         st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("CPM Network Diagram")
-        network_fig = create_network_diagram(cpm_df)
+        network_fig = create_network_diagram(cpm__df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# (No changes to the functions below this line)
+# (No changes to the create_gantt_chart and create_network_diagram functions)
 def create_gantt_chart(df):
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
@@ -192,7 +207,7 @@ def create_network_diagram(df):
             if not task_info.empty:
                 is_critical = task_info['On Critical Path?'].iloc[0]
                 node_colors.append('red' if is_critical == 'Yes' else 'skyblue')
-                node_hover_text.append(f"Task: {d}{task_info['Task Description'].iloc[0]}<br>Duration: {task_info['Duration'].iloc[0]}")
+                node_hover_text.append(f"Task: {node}<br>Desc: {task_info['Task Description'].iloc[0]}<br>Duration: {task_info['Duration'].iloc[0]}")
             else:
                 node_colors.append('grey'); node_hover_text.append(f"Task: {node} (Missing)")
     node_trace.marker.color = node_colors; node_trace.hovertext = node_hover_text
