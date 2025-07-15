@@ -7,98 +7,130 @@ import plotly.graph_objects as go
 import networkx as nx
 import re
 
-# Import functions from other project files
-from database import get_project_data_from_db, save_project_data_to_db, import_df_to_db
+# Updated database function imports
+from database import get_all_projects, get_project_data_from_db, save_tasks_to_db, import_df_to_db
 from cpm_logic import calculate_cpm
 from utils import get_sample_data
 
 # --- Main View Function ---
 def show_project_view():
-    
+
+    # --- Callbacks for State Management ---
     def process_uploaded_file():
         uploaded_file = st.session_state.get("file_uploader")
         if uploaded_file:
             try:
+                project_name = uploaded_file.name.rsplit('.', 1)[0] # Use filename as project name
                 df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-                import_df_to_db(df, project_id=1)
-                st.session_state.project_df = get_project_data_from_db(project_id=1)
+                new_project_id = import_df_to_db(df, project_name)
+                
+                # Automatically switch to the new project
+                st.session_state.current_project_id = new_project_id
+                st.session_state.project_df = get_project_data_from_db(new_project_id)
                 st.session_state.cpm_results = None
-                st.success("File uploaded and project data refreshed!")
+                st.success(f"Successfully imported and switched to project: {project_name}")
             except Exception as e:
                 st.error(f"Error processing file: {e}")
+    
+    def switch_project():
+        project_name = st.session_state.project_selector
+        st.session_state.current_project_id = st.session_state.all_projects[project_name]
+        st.session_state.project_df = get_project_data_from_db(st.session_state.current_project_id)
+        st.session_state.cpm_results = None # Clear results when switching
 
     # --- Initialize Session State ---
+    if 'all_projects' not in st.session_state:
+        st.session_state.all_projects = get_all_projects()
+    if 'current_project_id' not in st.session_state:
+        # Default to the first project in the list or None
+        st.session_state.current_project_id = next(iter(st.session_state.all_projects.values()), None)
     if 'project_df' not in st.session_state:
-        st.session_state.project_df = get_project_data_from_db(project_id=1)
+        st.session_state.project_df = get_project_data_from_db(st.session_state.current_project_id)
     if 'cpm_results' not in st.session_state:
         st.session_state.cpm_results = None
-    if 'show_sample_confirm' not in st.session_state:
-        st.session_state.show_sample_confirm = False
 
-    # --- UI and State Management ---
-    st.header("1. Project Setup")
-    start_date = st.date_input("Select Project Start Date", value=date.today())
+    # --- UI ---
+    st.header("1. Project Selection & Setup")
     
-    st.subheader("Import Project Plan")
-    st.info("Upload an Excel or CSV file with columns: 'Task ID', 'Task Description', 'Predecessors', 'Duration'.")
-    st.file_uploader("Choose a file", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file)
+    # Project Dropdown
+    project_names = list(st.session_state.all_projects.keys())
+    # Find the index of the current project to set the default value for the selectbox
+    try:
+        current_project_name = [name for name, id in st.session_state.all_projects.items() if id == st.session_state.current_project_id][0]
+        current_index = project_names.index(current_project_name)
+    except (IndexError, ValueError):
+        current_index = 0
+    
+    st.selectbox("Select Project", options=project_names, index=current_index, key="project_selector", on_change=switch_project)
+    
+    with st.expander("Import New Project or Load Sample"):
+        st.file_uploader("Upload Project File (CSV or Excel)", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file)
+        if st.button("Load Sample Project Data (Overwrites 'Default Project')"):
+            import_df_to_db(get_sample_data(), "Default Project")
+            st.session_state.all_projects = get_all_projects() # Refresh project list
+            st.success("Sample data loaded into 'Default Project'.")
 
-    # --- Load Sample Button ---
-    if st.button("Load Sample Project Data"):
-        st.session_state.show_sample_confirm = True # Set flag to show confirmation
-
-    # --- THE SAFETY MECHANISM ---
-    if st.session_state.show_sample_confirm:
-        with st.container(border=True):
-            st.warning("⚠️ **Are you sure?** This will overwrite your current project with the sample data.")
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                if st.button("Yes, Overwrite", type="primary"):
-                    import_df_to_db(get_sample_data(), project_id=1)
-                    st.session_state.project_df = get_project_data_from_db(project_id=1)
-                    st.session_state.cpm_results = None
-                    st.session_state.show_sample_confirm = False
-                    st.success("Sample data has been loaded.")
-                    st.rerun()
-            with col2:
-                if st.button("Cancel"):
-                    st.session_state.show_sample_confirm = False
-                    st.rerun()
-
+    start_date = st.date_input("Select Project Start Date", value=date.today())
     st.divider()
-    st.header("2. Task Planning")
-    st.markdown("Edit tasks below. Press 'Calculate & Save' to update the project plan.")
 
+    # --- Data Editor and Controls ---
+    st.header("2. Task Planning")
+    st.markdown("Edit tasks below, then calculate. You can export your edits at any time.")
+    
     if st.session_state.project_df.empty:
-        st.warning("No project data found. Load sample data or upload a file to begin.")
+        st.warning("No data in this project. Upload a file or load sample data.")
         return
 
     edited_df = st.data_editor(st.session_state.project_df, num_rows="dynamic", use_container_width=True)
-
-    if st.button("Calculate & Save Project Plan", type="primary"):
-        if edited_df is not None:
-            save_project_data_to_db(edited_df, project_id=1)
-            st.session_state.project_df = edited_df.copy()
-            st.session_state.cpm_results = calculate_cpm(st.session_state.project_df.copy())
     
+    col1, col2, col3 = st.columns([1.5, 1, 3])
+    with col1:
+        if st.button("Calculate & Save Project Plan", type="primary"):
+            # --- SAFETY MEASURE: Validate data before calculation ---
+            if edited_df['Task ID'].isnull().any() or "" in edited_df['Task ID'].values:
+                st.error("Validation Failed: One or more tasks has an empty 'Task ID'.")
+            elif edited_df['Task ID'].duplicated().any():
+                st.error("Validation Failed: Found duplicate 'Task ID's. Please ensure every ID is unique.")
+            else:
+                try:
+                    # Attempt to run calculation
+                    save_tasks_to_db(edited_df, st.session_state.current_project_id)
+                    st.session_state.project_df = edited_df.copy()
+                    st.session_state.cpm_results = calculate_cpm(st.session_state.project_df.copy())
+                except ValueError:
+                    # --- SAFETY MEASURE: Catch non-numeric duration ---
+                    st.error("Calculation Failed: Please ensure the 'Duration' column contains only valid numbers.")
+                except Exception as e:
+                    st.error(f"An unexpected error occurred: {e}")
+    
+    with col2:
+        # --- SAFETY MEASURE: Export to CSV ---
+        st.download_button(
+            label="Export as CSV",
+            data=edited_df.to_csv(index=False).encode('utf-8'),
+            file_name=f"{current_project_name}_backup.csv",
+            mime='text/csv',
+        )
+
+    # --- Results Display Block ---
     if st.session_state.cpm_results is not None:
+        # (This entire section is unchanged from the last version, it's already robust)
         cpm_df = st.session_state.cpm_results
         st.header("3. Results")
         st.subheader("Critical Path Analysis")
         st.dataframe(cpm_df)
         st.subheader("Gantt Chart")
         gantt_df = cpm_df.copy()
-        project_start_date = pd.to_datetime(start_date)
-        gantt_df['Start'] = gantt_df['ES'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
-        gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
+        gantt_df['Start'] = gantt_df['ES'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
+        gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         
         with st.container(border=True):
             st.write("Filter Controls")
-            col1, col2 = st.columns(2)
-            with col1:
+            f_col1, f_col2 = st.columns(2)
+            with f_col1:
                 show_critical_only = st.checkbox("Show only critical path tasks")
                 search_term = st.text_input("Search by Task Description")
-            with col2:
+            with f_col2:
                 phases = sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna())))
                 selected_phases = st.multiselect("Filter by Project Phase", options=phases)
                 min_date, max_date = gantt_df['Start'].min().date(), gantt_df['Finish'].max().date()
@@ -119,7 +151,8 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# (No changes to functions below this line)
+
+# (No changes to the create_gantt_chart and create_network_diagram functions)
 def create_gantt_chart(df):
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
