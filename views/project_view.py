@@ -12,7 +12,7 @@ from database import get_project_data_from_db, save_project_data_to_db, import_d
 from cpm_logic import calculate_cpm
 from utils import get_sample_data
 
-# --- Main View Function (No changes needed here) ---
+# --- Main View Function ---
 def show_project_view():
     def process_uploaded_file():
         uploader_key = "file_uploader"
@@ -57,34 +57,83 @@ def show_project_view():
             save_project_data_to_db(edited_df, project_id=1)
             st.session_state.project_df = edited_df.copy()
             cpm_df = calculate_cpm(st.session_state.project_df.copy())
+
             st.header("3. Results")
             st.subheader("Critical Path Analysis")
             st.dataframe(cpm_df)
+
+            # --- GANTT CHART WITH FILTERS ---
             st.subheader("Gantt Chart")
-            fig = create_gantt_chart(cpm_df, start_date)
+            
+            # First, calculate the Gantt-specific columns
+            gantt_df = cpm_df.copy()
+            project_start_date = pd.to_datetime(start_date)
+            gantt_df['Start'] = gantt_df['ES'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
+            gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
+            
+            # --- FILTER CONTROL PANEL ---
+            with st.container(border=True):
+                st.write("Filter Controls")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Filter by Critical Path
+                    show_critical_only = st.checkbox("Show only critical path tasks")
+                    
+                    # Search by Task Name
+                    search_term = st.text_input("Search by Task Description")
+
+                with col2:
+                    # Filter by Project Phase
+                    # Automatically extract phases from Task IDs (e.g., 'FND-', 'FRAME-')
+                    phases = sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna())))
+                    selected_phases = st.multiselect("Filter by Project Phase", options=phases)
+
+                    # Filter by Date Range
+                    min_date = gantt_df['Start'].min().date()
+                    max_date = gantt_df['Finish'].max().date()
+                    date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+
+            # Apply filters
+            filtered_df = gantt_df
+
+            if show_critical_only:
+                filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
+            
+            if selected_phases:
+                filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
+
+            if search_term:
+                filtered_df = filtered_df[filtered_df['Task Description'].str.contains(search_term, case=False, na=False)]
+            
+            if len(date_range) == 2:
+                start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+                # Find tasks that overlap with the selected date range
+                filtered_df = filtered_df[
+                    (filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)
+                ]
+
+            fig = create_gantt_chart(filtered_df)
             st.plotly_chart(fig, use_container_width=True)
+
             st.subheader("CPM Network Diagram")
             network_fig = create_network_diagram(cpm_df)
             st.plotly_chart(network_fig, use_container_width=True)
 
-# --- Gantt Chart Function (No changes needed here) ---
-def create_gantt_chart(df, start_date):
-    gantt_df = df.copy()
-    project_start_date = pd.to_datetime(start_date)
-    gantt_df['Start'] = gantt_df['ES'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
-    gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
+# --- Gantt Chart Function (Slightly modified to just plot data) ---
+def create_gantt_chart(df):
+    """Creates a Gantt chart from a DataFrame that already has Start and Finish columns."""
     fig = px.timeline(
-        gantt_df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
+        df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
         title="Project Gantt Chart", color_discrete_map={"Yes": "#FF0000", "No": "#0000FF"},
         hover_data=["Task ID", "Duration", "ES", "EF", "LS", "LF", "Float"]
     )
     fig.update_yaxes(autorange="reversed")
     return fig
 
-# --- DEFINITIVE, PROFESSIONAL Network Diagram Logic ---
+# --- Network Diagram Function (No changes needed here) ---
 def create_network_diagram(df):
     G = nx.DiGraph()
-    # Add nodes and edges from the dataframe
     for _, row in df.iterrows():
         G.add_node(row['Task ID'])
         if pd.notna(row['Predecessors']) and row['Predecessors']:
@@ -92,41 +141,28 @@ def create_network_diagram(df):
             for p_task in predecessors:
                 if p_task in G:
                     G.add_edge(p_task, row['Task ID'])
-
-    # --- TOPOLOGICAL LAYOUT LOGIC ---
-    pos = {}
     try:
-        # Arrange nodes in columns based on their sequence in the project flow
         generations = list(nx.topological_generations(G))
+        pos = {}
         for i, generation in enumerate(generations):
-            # Center each column of nodes vertically
             y_start = (len(generation) - 1) / 2.0
             for j, node in enumerate(generation):
                 pos[node] = (i, y_start - j)
     except nx.NetworkXUnfeasible:
-        # Fallback for cyclic graphs (which shouldn't happen in CPM)
         st.warning("Project has a cyclic dependency! Using a spring layout as a fallback.")
         pos = nx.spring_layout(G, seed=42)
-
-    # Adaptive visuals for clarity on large vs small graphs
+        
     is_large_graph = len(df) > 25
     node_size = 20 if is_large_graph else 35
     standoff_dist = 12 if is_large_graph else 20
     text_inside_node = "" if is_large_graph else [f"<b>{node}</b>" for node in G.nodes()]
-
-    # Create Plotly traces
     node_trace = go.Scatter(
-        x=[pos[n][0] for n in G.nodes() if n in pos],
-        y=[pos[n][1] for n in G.nodes() if n in pos],
+        x=[pos[n][0] for n in G.nodes() if n in pos], y=[pos[n][1] for n in G.nodes() if n in pos],
         mode='markers' if is_large_graph else 'markers+text',
-        text=text_inside_node, textposition="middle center",
-        hoverinfo='text',
+        text=text_inside_node, textposition="middle center", hoverinfo='text',
         marker=dict(size=node_size, line=dict(width=1, color='Black'))
     )
-
-    # Color nodes and set hover text
-    node_colors = []
-    node_hover_text = []
+    node_colors, node_hover_text = [], []
     for node in G.nodes():
         if node in pos:
             task_info = df[df['Task ID'] == node]
@@ -135,14 +171,9 @@ def create_network_diagram(df):
                 node_colors.append('red' if is_critical == 'Yes' else 'skyblue')
                 node_hover_text.append(f"Task: {node}<br>Desc: {task_info['Task Description'].iloc[0]}<br>Duration: {task_info['Duration'].iloc[0]}")
             else:
-                node_colors.append('grey')
-                node_hover_text.append(f"Task: {node} (Missing)")
-    node_trace.marker.color = node_colors
-    node_trace.hovertext = node_hover_text
+                node_colors.append('grey'); node_hover_text.append(f"Task: {node} (Missing)")
+    node_trace.marker.color = node_colors; node_trace.hovertext = node_hover_text
     node_trace.textfont = dict(color='white', size=10)
-
-
-    # Create annotations for arrows
     arrow_annotations = []
     for edge in G.edges():
         if edge[0] in pos and edge[1] in pos:
@@ -155,8 +186,6 @@ def create_network_diagram(df):
                     standoff=standoff_dist
                 ))
             )
-
-    # Define layout and create figure
     layout = go.Layout(
         title=dict(text='CPM Network Diagram', font=dict(size=16)), showlegend=False,
         hovermode='closest', margin=dict(b=20, l=5, r=5, t=40),
@@ -164,6 +193,5 @@ def create_network_diagram(df):
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         annotations=arrow_annotations
     )
-
     fig = go.Figure(data=[node_trace], layout=layout)
     return fig
