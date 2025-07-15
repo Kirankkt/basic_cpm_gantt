@@ -133,7 +133,11 @@ def show_project_view():
             f_col1, f_col2 = st.columns(2)
             with f_col1:
                 show_critical_only = st.checkbox("Show only critical path tasks")
-                search_term = st.text_input("Search by Task Description")
+                
+                # --- THIS IS THE IMPROVED FILTER ---
+                task_list = ["All"] + sorted(gantt_df['Task Description'].tolist())
+                selected_task = st.selectbox("Search for a Specific Task", options=task_list)
+
             with f_col2:
                 phases = sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna())))
                 selected_phases = st.multiselect("Filter by Project Phase", options=phases)
@@ -143,7 +147,11 @@ def show_project_view():
         filtered_df = gantt_df
         if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
         if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
-        if search_term: filtered_df = filtered_df[filtered_df['Task Description'].str.contains(search_term, case=False, na=False)]
+        
+        # Apply the new task filter
+        if selected_task != "All":
+            filtered_df = filtered_df[filtered_df['Task Description'] == selected_task]
+            
         if len(date_range) == 2:
             start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
             filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
@@ -152,11 +160,10 @@ def show_project_view():
         st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("CPM Network Diagram")
-        # THIS IS THE FIX
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# (No changes to the functions below this line)
+# (No changes to functions below this line)
 def create_gantt_chart(df):
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
