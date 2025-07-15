@@ -14,35 +14,44 @@ from utils import get_sample_data
 
 # --- Main View Function ---
 def show_project_view():
+    
+    # --- Callback to process file uploads ---
     def process_uploaded_file():
-        uploader_key = "file_uploader"
-        uploaded_file = st.session_state[uploader_key]
-        if uploaded_file is not None:
+        uploaded_file = st.session_state.get("file_uploader")
+        if uploaded_file:
             try:
                 df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
                 import_df_to_db(df, project_id=1)
                 st.session_state.project_df = get_project_data_from_db(project_id=1)
+                st.session_state.cpm_results = None # Clear old results
                 st.success("File uploaded and project data refreshed!")
             except Exception as e:
                 st.error(f"Error processing file: {e}")
 
+    # --- Initialize Session State ---
     if 'project_df' not in st.session_state:
         st.session_state.project_df = get_project_data_from_db(project_id=1)
+    if 'cpm_results' not in st.session_state:
+        st.session_state.cpm_results = None
 
+    # --- UI and State Management ---
     st.header("1. Project Setup")
     start_date = st.date_input("Select Project Start Date", value=date.today())
+    
     st.subheader("Import Project Plan")
     st.info("Upload an Excel or CSV file with columns: 'Task ID', 'Task Description', 'Predecessors', 'Duration'.")
-    st.file_uploader(
-        "Choose a file", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file
-    )
+    st.file_uploader("Choose a file", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file)
+
     if st.button("Load Sample Project Data"):
         import_df_to_db(get_sample_data(), project_id=1)
         st.session_state.project_df = get_project_data_from_db(project_id=1)
+        st.session_state.cpm_results = None # Clear old results
         st.success("Sample data loaded!")
         st.rerun()
 
     st.divider()
+
+    # --- Data Editor ---
     st.header("2. Task Planning")
     st.markdown("Edit tasks below. Press 'Calculate & Save' to update the project plan.")
 
@@ -52,77 +61,62 @@ def show_project_view():
 
     edited_df = st.data_editor(st.session_state.project_df, num_rows="dynamic", use_container_width=True)
 
+    # --- Calculation Button ---
     if st.button("Calculate & Save Project Plan", type="primary"):
         if edited_df is not None:
             save_project_data_to_db(edited_df, project_id=1)
             st.session_state.project_df = edited_df.copy()
-            cpm_df = calculate_cpm(st.session_state.project_df.copy())
+            # CRITICAL: Store results in session state
+            st.session_state.cpm_results = calculate_cpm(st.session_state.project_df.copy())
+    
+    # --- RESULTS DISPLAY BLOCK ---
+    # This block now runs independently of the button click, based on session state.
+    if st.session_state.cpm_results is not None:
+        cpm_df = st.session_state.cpm_results
+        
+        st.header("3. Results")
+        st.subheader("Critical Path Analysis")
+        st.dataframe(cpm_df)
 
-            st.header("3. Results")
-            st.subheader("Critical Path Analysis")
-            st.dataframe(cpm_df)
+        st.subheader("Gantt Chart")
+        
+        gantt_df = cpm_df.copy()
+        project_start_date = pd.to_datetime(start_date)
+        gantt_df['Start'] = gantt_df['ES'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
+        gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
+        
+        with st.container(border=True):
+            st.write("Filter Controls")
+            col1, col2 = st.columns(2)
+            with col1:
+                show_critical_only = st.checkbox("Show only critical path tasks")
+                search_term = st.text_input("Search by Task Description")
+            with col2:
+                phases = sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna())))
+                selected_phases = st.multiselect("Filter by Project Phase", options=phases)
+                min_date, max_date = gantt_df['Start'].min().date(), gantt_df['Finish'].max().date()
+                date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
-            # --- GANTT CHART WITH FILTERS ---
-            st.subheader("Gantt Chart")
-            
-            # First, calculate the Gantt-specific columns
-            gantt_df = cpm_df.copy()
-            project_start_date = pd.to_datetime(start_date)
-            gantt_df['Start'] = gantt_df['ES'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
-            gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
-            
-            # --- FILTER CONTROL PANEL ---
-            with st.container(border=True):
-                st.write("Filter Controls")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Filter by Critical Path
-                    show_critical_only = st.checkbox("Show only critical path tasks")
-                    
-                    # Search by Task Name
-                    search_term = st.text_input("Search by Task Description")
+        filtered_df = gantt_df
+        if show_critical_only:
+            filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
+        if selected_phases:
+            filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
+        if search_term:
+            filtered_df = filtered_df[filtered_df['Task Description'].str.contains(search_term, case=False, na=False)]
+        if len(date_range) == 2:
+            start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+            filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
 
-                with col2:
-                    # Filter by Project Phase
-                    # Automatically extract phases from Task IDs (e.g., 'FND-', 'FRAME-')
-                    phases = sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna())))
-                    selected_phases = st.multiselect("Filter by Project Phase", options=phases)
+        fig = create_gantt_chart(filtered_df)
+        st.plotly_chart(fig, use_container_width=True)
 
-                    # Filter by Date Range
-                    min_date = gantt_df['Start'].min().date()
-                    max_date = gantt_df['Finish'].max().date()
-                    date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+        st.subheader("CPM Network Diagram")
+        network_fig = create_network_diagram(cpm_df)
+        st.plotly_chart(network_fig, use_container_width=True)
 
-            # Apply filters
-            filtered_df = gantt_df
-
-            if show_critical_only:
-                filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
-            
-            if selected_phases:
-                filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
-
-            if search_term:
-                filtered_df = filtered_df[filtered_df['Task Description'].str.contains(search_term, case=False, na=False)]
-            
-            if len(date_range) == 2:
-                start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
-                # Find tasks that overlap with the selected date range
-                filtered_df = filtered_df[
-                    (filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)
-                ]
-
-            fig = create_gantt_chart(filtered_df)
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.subheader("CPM Network Diagram")
-            network_fig = create_network_diagram(cpm_df)
-            st.plotly_chart(network_fig, use_container_width=True)
-
-# --- Gantt Chart Function (Slightly modified to just plot data) ---
+# (No changes to the functions below this line)
 def create_gantt_chart(df):
-    """Creates a Gantt chart from a DataFrame that already has Start and Finish columns."""
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
         title="Project Gantt Chart", color_discrete_map={"Yes": "#FF0000", "No": "#0000FF"},
@@ -131,7 +125,6 @@ def create_gantt_chart(df):
     fig.update_yaxes(autorange="reversed")
     return fig
 
-# --- Network Diagram Function (No changes needed here) ---
 def create_network_diagram(df):
     G = nx.DiGraph()
     for _, row in df.iterrows():
