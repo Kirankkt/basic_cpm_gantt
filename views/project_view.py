@@ -14,41 +14,47 @@ from utils import get_sample_data
 
 # --- Main View Function ---
 def show_project_view():
-    st.header("1. Project Setup")
+    
+    # --- Callback Function to handle file uploads robustly ---
+    def process_uploaded_file():
+        uploader_key = "file_uploader"
+        uploaded_file = st.session_state[uploader_key]
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                else:
+                    df = pd.read_excel(uploaded_file)
+                
+                import_df_to_db(df, project_id=1)
+                # CRITICAL: Update the session state immediately after import
+                st.session_state.project_df = get_project_data_from_db(project_id=1)
+                st.success("File uploaded and project data refreshed!")
+
+            except Exception as e:
+                st.error(f"Error processing file: {e}")
 
     # --- Initialize Session State ---
-    # This is the key to robust state management.
     if 'project_df' not in st.session_state:
         st.session_state.project_df = get_project_data_from_db(project_id=1)
 
-    # --- UI Elements ---
+    # --- UI and State Management ---
+    st.header("1. Project Setup")
     start_date = st.date_input("Select Project Start Date", value=date.today())
+    
     st.subheader("Import Project Plan")
     st.info("Upload an Excel or CSV file with columns: 'Task ID', 'Task Description', 'Predecessors', 'Duration'.")
-    uploaded_file = st.file_uploader("Choose a file", type=['csv', 'xlsx'], key="file_uploader")
+    
+    # THE FIX: Attach the callback to the file uploader
+    st.file_uploader(
+        "Choose a file",
+        type=['csv', 'xlsx'],
+        key="file_uploader",
+        on_change=process_uploaded_file # This runs the function upon upload
+    )
 
-    # --- File Upload Logic ---
-    if uploaded_file:
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
-            
-            import_df_to_db(df, project_id=1)
-            # CRITICAL FIX: Immediately update the session state with the new data
-            st.session_state.project_df = get_project_data_from_db(project_id=1)
-            st.success("File uploaded and project data refreshed!")
-            # We use st.rerun() to clear the file uploader and show the new table cleanly.
-            st.rerun()
-
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
-
-    # --- Load Sample Data Logic ---
     if st.button("Load Sample Project Data"):
         import_df_to_db(get_sample_data(), project_id=1)
-        # CRITICAL FIX: Immediately update the session state
         st.session_state.project_df = get_project_data_from_db(project_id=1)
         st.success("Sample data loaded!")
         st.rerun()
@@ -59,20 +65,17 @@ def show_project_view():
     st.header("2. Task Planning")
     st.markdown("Edit tasks below. Press 'Calculate & Save' to update the project plan.")
 
-    # Always use the session_state dataframe for the editor
     if st.session_state.project_df.empty:
         st.warning("No project data found. Load sample data or upload a file to begin.")
         return
 
-    # The data editor now edits the dataframe held in session state
+    # The data editor now ALWAYS reflects the true state from session_state
     edited_df = st.data_editor(st.session_state.project_df, num_rows="dynamic", use_container_width=True)
 
     if st.button("Calculate & Save Project Plan", type="primary"):
         if edited_df is not None:
-            # Save the latest edits from the screen
             save_project_data_to_db(edited_df, project_id=1)
-            # Update session state to ensure consistency
-            st.session_state.project_df = edited_df.copy()
+            st.session_state.project_df = edited_df.copy() # Keep state in sync with edits
             
             cpm_df = calculate_cpm(st.session_state.project_df.copy())
 
@@ -89,7 +92,7 @@ def show_project_view():
             st.plotly_chart(network_fig, use_container_width=True)
 
 
-# --- (No changes to Gantt Chart or Network Diagram functions) ---
+# --- (No changes to Gantt Chart or Network Diagram functions below this line) ---
 def create_gantt_chart(df, start_date):
     gantt_df = df.copy()
     project_start_date = pd.to_datetime(start_date)
