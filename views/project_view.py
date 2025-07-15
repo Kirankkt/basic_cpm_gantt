@@ -52,17 +52,14 @@ def show_project_view():
     # --- UI ---
     st.header("1. Project Selection & Setup")
     
-    # --- ROBUST Project Dropdown Logic ---
     project_names = list(st.session_state.all_projects.keys())
-    current_project_name = "No Project Selected" # Safe default value
+    current_project_name = "No Project Selected"
     current_index = 0
     if st.session_state.current_project_id and project_names:
         try:
             current_project_name = [name for name, id_ in st.session_state.all_projects.items() if id_ == st.session_state.current_project_id][0]
             current_index = project_names.index(current_project_name)
         except (IndexError, ValueError):
-            # This can happen if the current project ID is no longer in the list
-            # Default to the first project
             if project_names:
                 current_project_name = project_names[0]
                 st.session_state.current_project_id = st.session_state.all_projects[current_project_name]
@@ -72,7 +69,6 @@ def show_project_view():
     with st.expander("Import New Project or Load Sample"):
         st.file_uploader("Upload Project File (CSV or Excel)", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file)
         
-        # --- FIXED Load Sample Button Logic ---
         if st.button("Load Sample Project Data (Overwrites 'Default Project')"):
             project_name = "Default Project"
             project_id = import_df_to_db(get_sample_data(), project_name)
@@ -114,7 +110,6 @@ def show_project_view():
                     st.error(f"An unexpected error occurred: {e}")
     
     with col2:
-        # This download button is now safe because current_project_name always has a value
         st.download_button(
             label="Export as CSV",
             data=edited_df.to_csv(index=False).encode('utf-8'),
@@ -157,10 +152,11 @@ def show_project_view():
         st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("CPM Network Diagram")
-        network_fig = create_network_diagram(cpm__df)
+        # THIS IS THE FIX
+        network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# (No changes to the create_gantt_chart and create_network_diagram functions)
+# (No changes to the functions below this line)
 def create_gantt_chart(df):
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
