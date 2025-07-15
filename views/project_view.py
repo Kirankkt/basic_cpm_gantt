@@ -15,7 +15,6 @@ from utils import get_sample_data
 # --- Main View Function ---
 def show_project_view():
     
-    # --- Callback to process file uploads ---
     def process_uploaded_file():
         uploaded_file = st.session_state.get("file_uploader")
         if uploaded_file:
@@ -23,7 +22,7 @@ def show_project_view():
                 df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
                 import_df_to_db(df, project_id=1)
                 st.session_state.project_df = get_project_data_from_db(project_id=1)
-                st.session_state.cpm_results = None # Clear old results
+                st.session_state.cpm_results = None
                 st.success("File uploaded and project data refreshed!")
             except Exception as e:
                 st.error(f"Error processing file: {e}")
@@ -33,6 +32,8 @@ def show_project_view():
         st.session_state.project_df = get_project_data_from_db(project_id=1)
     if 'cpm_results' not in st.session_state:
         st.session_state.cpm_results = None
+    if 'show_sample_confirm' not in st.session_state:
+        st.session_state.show_sample_confirm = False
 
     # --- UI and State Management ---
     st.header("1. Project Setup")
@@ -42,16 +43,29 @@ def show_project_view():
     st.info("Upload an Excel or CSV file with columns: 'Task ID', 'Task Description', 'Predecessors', 'Duration'.")
     st.file_uploader("Choose a file", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file)
 
+    # --- Load Sample Button ---
     if st.button("Load Sample Project Data"):
-        import_df_to_db(get_sample_data(), project_id=1)
-        st.session_state.project_df = get_project_data_from_db(project_id=1)
-        st.session_state.cpm_results = None # Clear old results
-        st.success("Sample data loaded!")
-        st.rerun()
+        st.session_state.show_sample_confirm = True # Set flag to show confirmation
+
+    # --- THE SAFETY MECHANISM ---
+    if st.session_state.show_sample_confirm:
+        with st.container(border=True):
+            st.warning("⚠️ **Are you sure?** This will overwrite your current project with the sample data.")
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                if st.button("Yes, Overwrite", type="primary"):
+                    import_df_to_db(get_sample_data(), project_id=1)
+                    st.session_state.project_df = get_project_data_from_db(project_id=1)
+                    st.session_state.cpm_results = None
+                    st.session_state.show_sample_confirm = False
+                    st.success("Sample data has been loaded.")
+                    st.rerun()
+            with col2:
+                if st.button("Cancel"):
+                    st.session_state.show_sample_confirm = False
+                    st.rerun()
 
     st.divider()
-
-    # --- Data Editor ---
     st.header("2. Task Planning")
     st.markdown("Edit tasks below. Press 'Calculate & Save' to update the project plan.")
 
@@ -61,25 +75,18 @@ def show_project_view():
 
     edited_df = st.data_editor(st.session_state.project_df, num_rows="dynamic", use_container_width=True)
 
-    # --- Calculation Button ---
     if st.button("Calculate & Save Project Plan", type="primary"):
         if edited_df is not None:
             save_project_data_to_db(edited_df, project_id=1)
             st.session_state.project_df = edited_df.copy()
-            # CRITICAL: Store results in session state
             st.session_state.cpm_results = calculate_cpm(st.session_state.project_df.copy())
     
-    # --- RESULTS DISPLAY BLOCK ---
-    # This block now runs independently of the button click, based on session state.
     if st.session_state.cpm_results is not None:
         cpm_df = st.session_state.cpm_results
-        
         st.header("3. Results")
         st.subheader("Critical Path Analysis")
         st.dataframe(cpm_df)
-
         st.subheader("Gantt Chart")
-        
         gantt_df = cpm_df.copy()
         project_start_date = pd.to_datetime(start_date)
         gantt_df['Start'] = gantt_df['ES'].apply(lambda x: project_start_date + timedelta(days=int(x - 1)))
@@ -98,12 +105,9 @@ def show_project_view():
                 date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
         filtered_df = gantt_df
-        if show_critical_only:
-            filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
-        if selected_phases:
-            filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
-        if search_term:
-            filtered_df = filtered_df[filtered_df['Task Description'].str.contains(search_term, case=False, na=False)]
+        if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
+        if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
+        if search_term: filtered_df = filtered_df[filtered_df['Task Description'].str.contains(search_term, case=False, na=False)]
         if len(date_range) == 2:
             start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
             filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
@@ -115,7 +119,7 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# (No changes to the functions below this line)
+# (No changes to functions below this line)
 def create_gantt_chart(df):
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
