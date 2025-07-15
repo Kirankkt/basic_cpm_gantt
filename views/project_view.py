@@ -80,7 +80,6 @@ def create_network_diagram(df):
         node_y.append(y)
         node_text.append(f"Task: {node}")
         
-        # --- THIS IS THE FIX ---
         # Check if the node from the graph exists in the dataframe
         task_info = df[df['Task ID'] == node]
         if not task_info.empty:
@@ -185,5 +184,4 @@ def show_project_view():
             
             st.subheader("CPM Network Diagram")
             network_fig = create_network_diagram(cpm_df)
-            st.plotly_chart(network_fig, use_container_width=True)```
-
+            st.plotly_chart(network_fig, use_container_width=True)
