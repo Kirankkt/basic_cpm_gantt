@@ -54,7 +54,7 @@ def create_network_diagram(df):
                     # Networkx will automatically add p_task as a node if it doesn't exist
                     G.add_edge(p_task, row['Task ID'])
 
-    pos = nx.spring_layout(G, k=0.9, iterations=50)
+    pos = nx.spring_layout(G, k=0.9, iterations=50, seed=42)
 
     edge_x = []
     edge_y = []
