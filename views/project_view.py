@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import networkx as nx
 import re
 
-# ... (other functions remain the same) ...
+# Import functions from other project files
 from database import get_project_data_from_db, save_project_data_to_db, import_df_to_db
 from cpm_logic import calculate_cpm
 from utils import get_sample_data
@@ -33,7 +33,7 @@ def create_gantt_chart(df, start_date):
 # --- UPDATED Network Diagram Logic ---
 def create_network_diagram(df):
     """
-    Creates a CPM network diagram with a traditional left-to-right layout.
+    Creates a CPM network diagram with a traditional left-to-right layout and arrows.
     """
     G = nx.DiGraph()
     df['Predecessors'] = df['Predecessors'].astype(str).fillna('')
@@ -48,20 +48,15 @@ def create_network_diagram(df):
                 if p_task:
                     G.add_edge(p_task, row['Task ID'])
 
-    # --- NEW LAYOUT LOGIC ---
-    # Position nodes based on their Early Start (ES) for a left-to-right flow
     pos = {}
-    y_positions = {} # To track y-coords for each ES value and avoid overlap
+    y_positions = {}
     for index, row in df.iterrows():
         es = row['ES']
         task_id = row['Task ID']
-        
-        # Increment y-position for each new task at the same ES
         y_level = y_positions.get(es, 0)
         pos[task_id] = (es, y_level)
-        y_positions[es] = y_level - 1.5 # Spread subsequent tasks at the same level
+        y_positions[es] = y_level - 1.5
 
-    # Center the layout vertically
     if pos:
         max_y = max(p[1] for p in pos.values())
         min_y = min(p[1] for p in pos.values())
@@ -69,16 +64,24 @@ def create_network_diagram(df):
         for node, (x, y) in pos.items():
             pos[node] = (x, y - y_center)
 
-
-    edge_x, edge_y = [], []
+    # --- ARROW LOGIC ---
+    # We will now use annotations to draw arrows instead of a separate line trace.
+    arrow_annotations = []
     for edge in G.edges():
         if edge[0] in pos and edge[1] in pos:
             x0, y0 = pos[edge[0]]
             x1, y1 = pos[edge[1]]
-            edge_x.extend([x0, x1, None])
-            edge_y.extend([y0, y1, None])
-
-    edge_trace = go.Scatter(x=edge_x, y=edge_y, line=dict(width=1, color='#888'), hoverinfo='none', mode='lines')
+            arrow_annotations.append(
+                go.layout.Annotation(dict(
+                    ax=x0, ay=y0, x=x1, y=y1,
+                    xref='x', yref='y', axref='x', ayref='y',
+                    showarrow=True,
+                    arrowhead=3,
+                    arrowsize=2,
+                    arrowwidth=1.5,
+                    arrowcolor='#888'
+                ))
+            )
 
     node_x, node_y, node_text, node_color = [], [], [], []
     for node in G.nodes():
@@ -106,19 +109,22 @@ def create_network_diagram(df):
         textfont=dict(color='white', size=12),
         marker=dict(color=node_color, size=45, line=dict(color='Black', width=2))
     )
-
-    fig = go.Figure(data=[edge_trace, node_trace],
-                 layout=go.Layout(
-                    title=dict(text='<br>CPM Network Diagram', font=dict(size=16)),
-                    showlegend=False,
-                    hovermode='closest',
-                    margin=dict(b=20,l=5,r=5,t=40),
-                    xaxis=dict(title='Project Timeline (Days)', showgrid=True, zeroline=False, showticklabels=True),
-                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+    
+    # Add the arrow annotations to the layout
+    layout = go.Layout(
+        title=dict(text='<br>CPM Network Diagram', font=dict(size=16)),
+        showlegend=False,
+        hovermode='closest',
+        margin=dict(b=20, l=5, r=5, t=40),
+        xaxis=dict(title='Project Timeline (Days)', showgrid=True, zeroline=False, showticklabels=True),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        annotations=arrow_annotations  # This is the key addition
     )
+
+    fig = go.Figure(data=[node_trace], layout=layout)
     return fig
 
-# ... (rest of the file is unchanged) ...
+# --- Main View Function ---
 def show_project_view():
     st.header("1. Project Setup")
     start_date = st.date_input("Select Project Start Date", value=date.today())
