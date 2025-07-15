@@ -2,14 +2,16 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
+import plotly.express as px
+import plotly.graph_objects as go
+import networkx as nx
 
 # Import functions from other project files
 from database import get_project_data_from_db, save_project_data_to_db, import_df_to_db
 from cpm_logic import calculate_cpm
 from utils import get_sample_data
-import plotly.express as px
 
-# --- Gantt Chart Logic (Moved here for simplicity) ---
+# --- Gantt Chart Logic ---
 def create_gantt_chart(df, start_date):
     """
     Creates a Gantt chart using Plotly based on a selected start date.
@@ -33,6 +35,75 @@ def create_gantt_chart(df, start_date):
     )
     fig.update_yaxes(autorange="reversed")
     return fig
+
+# --- NEW: Network Diagram Logic ---
+def create_network_diagram(df):
+    """
+    Creates a CPM network diagram using NetworkX and Plotly.
+    """
+    G = nx.DiGraph()
+    for index, row in df.iterrows():
+        G.add_node(row['Task ID'])
+
+    for index, row in df.iterrows():
+        if row['Predecessors']:
+            predecessors = [p.strip() for p in row['Predecessors'].split(',')]
+            for p_task in predecessors:
+                if p_task:
+                    G.add_edge(p_task, row['Task ID'])
+
+    pos = nx.spring_layout(G, k=0.9, iterations=50)
+
+    edge_x = []
+    edge_y = []
+    for edge in G.edges():
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+
+    edge_trace = go.Scatter(
+        x=edge_x, y=edge_y,
+        line=dict(width=0.5, color='#888'),
+        hoverinfo='none',
+        mode='lines')
+
+    node_x = []
+    node_y = []
+    node_text = []
+    node_color = []
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        node_text.append(node)
+        is_critical = df[df['Task ID'] == node]['On Critical Path?'].iloc[0]
+        node_color.append('red' if is_critical == 'Yes' else 'skyblue')
+
+    node_trace = go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers+text',
+        text=node_text,
+        textposition="top center",
+        hoverinfo='text',
+        marker=dict(
+            showscale=False,
+            color=node_color,
+            size=20,
+            line_width=2))
+
+    fig = go.Figure(data=[edge_trace, node_trace],
+                 layout=go.Layout(
+                    title='<br>CPM Network Diagram',
+                    titlefont_size=16,
+                    showlegend=False,
+                    hovermode='closest',
+                    margin=dict(b=20,l=5,r=5,t=40),
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+                    )
+    return fig
+
 
 # --- Main View Function ---
 def show_project_view():
@@ -90,3 +161,8 @@ def show_project_view():
             st.subheader("Gantt Chart")
             fig = create_gantt_chart(cpm_df, start_date)
             st.plotly_chart(fig, use_container_width=True)
+            
+            # --- ADDED THIS SECTION FOR THE NETWORK DIAGRAM ---
+            st.subheader("CPM Network Diagram")
+            network_fig = create_network_diagram(cpm_df)
+            st.plotly_chart(network_fig, use_container_width=True)
