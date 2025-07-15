@@ -8,6 +8,7 @@ import networkx as nx
 import re
 
 # Updated database function imports
+# THIS LINE IS FIXED
 from database import get_all_projects, get_project_data_from_db, save_tasks_to_db, import_df_to_db
 from cpm_logic import calculate_cpm
 from utils import get_sample_data
@@ -42,7 +43,6 @@ def show_project_view():
     if 'all_projects' not in st.session_state:
         st.session_state.all_projects = get_all_projects()
     if 'current_project_id' not in st.session_state:
-        # Default to the first project in the list or None
         st.session_state.current_project_id = next(iter(st.session_state.all_projects.values()), None)
     if 'project_df' not in st.session_state:
         st.session_state.project_df = get_project_data_from_db(st.session_state.current_project_id)
@@ -52,9 +52,7 @@ def show_project_view():
     # --- UI ---
     st.header("1. Project Selection & Setup")
     
-    # Project Dropdown
     project_names = list(st.session_state.all_projects.keys())
-    # Find the index of the current project to set the default value for the selectbox
     try:
         current_project_name = [name for name, id in st.session_state.all_projects.items() if id == st.session_state.current_project_id][0]
         current_index = project_names.index(current_project_name)
@@ -67,7 +65,7 @@ def show_project_view():
         st.file_uploader("Upload Project File (CSV or Excel)", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file)
         if st.button("Load Sample Project Data (Overwrites 'Default Project')"):
             import_df_to_db(get_sample_data(), "Default Project")
-            st.session_state.all_projects = get_all_projects() # Refresh project list
+            st.session_state.all_projects = get_all_projects()
             st.success("Sample data loaded into 'Default Project'.")
 
     start_date = st.date_input("Select Project Start Date", value=date.today())
@@ -86,25 +84,22 @@ def show_project_view():
     col1, col2, col3 = st.columns([1.5, 1, 3])
     with col1:
         if st.button("Calculate & Save Project Plan", type="primary"):
-            # --- SAFETY MEASURE: Validate data before calculation ---
             if edited_df['Task ID'].isnull().any() or "" in edited_df['Task ID'].values:
                 st.error("Validation Failed: One or more tasks has an empty 'Task ID'.")
             elif edited_df['Task ID'].duplicated().any():
                 st.error("Validation Failed: Found duplicate 'Task ID's. Please ensure every ID is unique.")
             else:
                 try:
-                    # Attempt to run calculation
+                    # THIS LINE IS FIXED
                     save_tasks_to_db(edited_df, st.session_state.current_project_id)
                     st.session_state.project_df = edited_df.copy()
                     st.session_state.cpm_results = calculate_cpm(st.session_state.project_df.copy())
                 except ValueError:
-                    # --- SAFETY MEASURE: Catch non-numeric duration ---
                     st.error("Calculation Failed: Please ensure the 'Duration' column contains only valid numbers.")
                 except Exception as e:
                     st.error(f"An unexpected error occurred: {e}")
     
     with col2:
-        # --- SAFETY MEASURE: Export to CSV ---
         st.download_button(
             label="Export as CSV",
             data=edited_df.to_csv(index=False).encode('utf-8'),
@@ -114,7 +109,6 @@ def show_project_view():
 
     # --- Results Display Block ---
     if st.session_state.cpm_results is not None:
-        # (This entire section is unchanged from the last version, it's already robust)
         cpm_df = st.session_state.cpm_results
         st.header("3. Results")
         st.subheader("Critical Path Analysis")
@@ -151,8 +145,7 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-
-# (No changes to the create_gantt_chart and create_network_diagram functions)
+# (No changes to the functions below this line)
 def create_gantt_chart(df):
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
@@ -199,7 +192,7 @@ def create_network_diagram(df):
             if not task_info.empty:
                 is_critical = task_info['On Critical Path?'].iloc[0]
                 node_colors.append('red' if is_critical == 'Yes' else 'skyblue')
-                node_hover_text.append(f"Task: {node}<br>Desc: {task_info['Task Description'].iloc[0]}<br>Duration: {task_info['Duration'].iloc[0]}")
+                node_hover_text.append(f"Task: {d}{task_info['Task Description'].iloc[0]}<br>Duration: {task_info['Duration'].iloc[0]}")
             else:
                 node_colors.append('grey'); node_hover_text.append(f"Task: {node} (Missing)")
     node_trace.marker.color = node_colors; node_trace.hovertext = node_hover_text
