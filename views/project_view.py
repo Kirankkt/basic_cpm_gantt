@@ -95,7 +95,6 @@ def show_project_view():
         
         st.header("3. Results & Progress")
         
-        # --- FIX #1: The main results table is restored ---
         st.subheader("Critical Path Analysis")
         st.dataframe(cpm_df, use_container_width=True)
         
@@ -130,14 +129,19 @@ def show_project_view():
                 min_date, max_date = gantt_df['Start'].min().date(), gantt_df['Finish'].max().date()
                 date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
-        # --- FIX #2: The filtering logic is now a simple, robust waterfall ---
-        filtered_df = gantt_df
-        if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
-        if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
-        if selected_tasks: filtered_df = filtered_df[filtered_df['Task Description'].isin(selected_tasks)]
-        if len(date_range) == 2:
-            start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
-            if not selected_tasks: # The date filter is ignored if the user hand-picks tasks
+        # --- THE DEFINITIVE FIX to the filtering logic ---
+        if selected_tasks:
+            # If the user hand-picks tasks, THIS IS THE ONLY FILTER THAT APPLIES.
+            filtered_df = gantt_df[gantt_df['Task Description'].isin(selected_tasks)]
+        else:
+            # Otherwise, apply the general filters in a waterfall.
+            filtered_df = gantt_df
+            if show_critical_only:
+                filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
+            if selected_phases:
+                filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
+            if len(date_range) == 2:
+                start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
                 filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
 
         fig = create_gantt_chart(filtered_df)
