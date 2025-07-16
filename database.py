@@ -4,9 +4,12 @@ from sqlalchemy import create_engine, inspect, text
 from pathlib import Path
 
 # ── DATABASE SETUP ───────────────────────────────────────────────
-Path("/mnt/data").mkdir(exist_ok=True)        # local safety; no‑op on Cloud
-DB_FILE = Path("/mnt/data") / "projects.db"   # lives on the persistent volume
+# REMOVE this — /mnt/data already exists and is writable on Cloud
+# Path("/mnt/data").mkdir(exist_ok=True)
+
+DB_FILE = Path("/mnt/data") / "projects.db"   # safe persistent location
 engine = create_engine(f"sqlite:///{DB_FILE}")
+
 
 # ── INITIALISATION ───────────────────────────────────────────────
 def initialize_database() -> None:
