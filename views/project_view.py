@@ -72,13 +72,8 @@ def show_project_view():
     if st.session_state.project_df.empty:
         st.warning("No data in this project."); return
 
-    # --- MINIMAL CHANGE: Add Status column to the data editor ---
     column_config = {
-        "Status": st.column_config.SelectboxColumn(
-            "Task Status",
-            options=["Not Started", "In Progress", "Complete"],
-            required=True
-        )
+        "Status": st.column_config.SelectboxColumn("Task Status", options=["Not Started", "In Progress", "Complete"], required=True)
     }
     edited_df = st.data_editor(st.session_state.project_df, column_config=column_config, num_rows="dynamic", use_container_width=True)
     
@@ -102,15 +97,12 @@ def show_project_view():
         
         st.header("3. Results & Progress")
         
-        # --- MINIMAL CHANGE: Add Progress Visualization ---
         with st.container(border=True):
             total_duration = cpm_df['Duration'].sum()
             completed_duration = cpm_df[cpm_df['Status'] == 'Complete']['Duration'].sum()
             progress = (completed_duration / total_duration) if total_duration > 0 else 0
-            
             st.markdown("#### Overall Project Progress")
             st.progress(progress, text=f"{progress:.0%} Complete")
-            
             p_col1, p_col2 = st.columns(2)
             p_col1.metric("Days Completed", f"{completed_duration}", f"of {total_duration} total days")
             p_col2.metric("Tasks Completed", f"{len(cpm_df[cpm_df['Status'] == 'Complete'])}", f"of {len(cpm_df)} total tasks")
@@ -120,6 +112,9 @@ def show_project_view():
         gantt_df['Start'] = gantt_df['ES'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         
+        # --- THE FIX: Create a new column for the pattern ---
+        gantt_df['Pattern'] = gantt_df['On Critical Path?'].apply(lambda x: '/' if x == 'Yes' else '')
+
         with st.container(border=True):
             st.write("Filter Controls")
             f_col1, f_col2 = st.columns(2);
@@ -148,13 +143,14 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# --- Gantt Chart Function (Modified to color by Status) ---
+# --- Gantt Chart Function (Modified to use both Color and Pattern) ---
 def create_gantt_chart(df):
-    """Creates a Gantt chart from a DataFrame, now coloring by Status."""
+    """Creates a Gantt chart from a DataFrame, now coloring by Status and patterning by Critical Path."""
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description",
-        # THE MINIMAL CHANGE: Color by Status
         color="Status",
+        # --- THE FIX: Add the pattern argument ---
+        pattern_shape="Pattern",
         color_discrete_map={
             "Not Started": "grey",
             "In Progress": "blue",
@@ -162,6 +158,8 @@ def create_gantt_chart(df):
         },
         hover_data=["Task ID", "Duration", "ES", "EF", "LS", "LF", "Float", "On Critical Path?"]
     )
+    # This ensures the legend for the pattern is clean
+    fig.update_layout(legend_title_text='Status & Critical Path')
     fig.update_yaxes(autorange="reversed")
     return fig
 
