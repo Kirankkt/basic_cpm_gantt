@@ -20,7 +20,7 @@ def show_project_view():
                 project_name = uploaded_file.name.rsplit('.', 1)[0]
                 df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
                 new_project_id = import_df_to_db(df, project_name)
-                
+
                 st.session_state.all_projects = get_all_projects()
                 st.session_state.current_project_id = new_project_id
                 st.session_state.project_df = get_project_data_from_db(new_project_id)
@@ -28,7 +28,7 @@ def show_project_view():
                 st.success(f"Successfully imported and switched to project: {project_name}")
             except Exception as e:
                 st.error(f"Error processing file: {e}")
-    
+
     def switch_project():
         project_name = st.session_state.project_selector
         if project_name:
@@ -42,7 +42,7 @@ def show_project_view():
     if 'cpm_results' not in st.session_state: st.session_state.cpm_results = None
 
     st.header("1. Project Selection & Setup")
-    
+
     project_names = list(st.session_state.all_projects.keys())
     current_project_name = "No Project Selected"
     current_index = 0
@@ -54,7 +54,7 @@ def show_project_view():
             if project_names: current_project_name = project_names[0]; st.session_state.current_project_id = st.session_state.all_projects[current_project_name]
 
     st.selectbox("Select Project", options=project_names, index=current_index, key="project_selector", on_change=switch_project)
-    
+
     with st.expander("Import New Project or Load Sample"):
         st.file_uploader("Upload Project File", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file)
         if st.button("Load Sample Data"):
@@ -68,13 +68,13 @@ def show_project_view():
 
     st.header("2. Task Planning & Status")
     st.markdown("Edit tasks and update their status below. Changes are saved when you press 'Calculate & Save'.")
-    
+
     if st.session_state.project_df.empty:
         st.warning("No data in this project."); return
 
     column_config = { "Status": st.column_config.SelectboxColumn("Task Status", options=["Not Started", "In Progress", "Complete"], required=True) }
     edited_df = st.data_editor(st.session_state.project_df, column_config=column_config, num_rows="dynamic", use_container_width=True)
-    
+
     col1, col2, col3 = st.columns([1.5, 1, 3])
     with col1:
         if st.button("Calculate & Save Project Plan", type="primary"):
@@ -92,12 +92,12 @@ def show_project_view():
 
     if st.session_state.cpm_results is not None:
         cpm_df = st.session_state.cpm_results
-        
+
         st.header("3. Results & Progress")
-        
+
         st.subheader("Critical Path Analysis")
         st.dataframe(cpm_df, use_container_width=True)
-        
+
         with st.container(border=True):
             total_duration = cpm_df['Duration'].sum()
             completed_duration = cpm_df[cpm_df['Status'] == 'Complete']['Duration'].sum()
@@ -112,13 +112,18 @@ def show_project_view():
         gantt_df = cpm_df.copy()
         gantt_df['Start'] = gantt_df['ES'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
-        
+
         def get_gantt_color(row):
             is_critical = row['On Critical Path?'] == 'Yes'; status = row['Status']
             if is_critical: return 'Critical (Complete)' if status == 'Complete' else 'Critical (In Progress)' if status == 'In Progress' else 'Critical (Not Started)'
             else: return 'Non-Critical (Complete)' if status == 'Complete' else 'Non-Critical (In Progress)' if status == 'In Progress' else 'Non-Critical (Not Started)'
         gantt_df['GanttColor'] = gantt_df.apply(get_gantt_color, axis=1)
-
+        
+        # --- Date range for the filter should be flexible, so we set it before filtering ---
+        # Allow selecting dates outside the default range by adding a buffer
+        min_date_for_filter = gantt_df['Start'].min().date() - timedelta(days=30)
+        max_date_for_filter = gantt_df['Finish'].max().date() + timedelta(days=30)
+        
         with st.container(border=True):
             st.write("Filter Controls"); f_col1, f_col2 = st.columns(2)
             with f_col1:
@@ -126,23 +131,33 @@ def show_project_view():
                 selected_tasks = st.multiselect("Search for Specific Tasks", options=sorted(gantt_df['Task Description'].tolist()))
             with f_col2:
                 selected_phases = st.multiselect("Filter by Project Phase", options=sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna()))))
-                min_date, max_date = gantt_df['Start'].min().date(), gantt_df['Finish'].max().date()
-                date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+                date_range = st.date_input("Filter by Date Range", 
+                                           value=(gantt_df['Start'].min().date(), gantt_df['Finish'].max().date()), 
+                                           min_value=min_date_for_filter, 
+                                           max_value=max_date_for_filter)
 
-        # --- THE FINAL, CORRECT FILTERING LOGIC ---
+        # --- CHANGE START: Corrected Filtering Logic ---
+        # This new logic block correctly prioritizes the specific task search over the general filters.
         if selected_tasks:
-            # If the user hand-picks tasks, THIS IS THE ONLY filter that applies.
+            # If the user hand-picks tasks, THIS IS THE ONLY filter that should apply.
+            # We ignore the other filters to ensure the selected tasks always appear.
             filtered_df = gantt_df[gantt_df['Task Description'].isin(selected_tasks)]
         else:
-            # Otherwise, apply the general filters as a waterfall.
+            # If no specific tasks are selected, then we apply the general filters as a waterfall.
             filtered_df = gantt_df
             if show_critical_only:
                 filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
             if selected_phases:
+                # Ensure starts_with works with a tuple of selections
                 filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
             if len(date_range) == 2:
-                start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
-                filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
+                start_filter = pd.to_datetime(date_range[0])
+                end_filter = pd.to_datetime(date_range[1])
+                # This logic correctly finds any task that "touches" the date range.
+                filtered_df = filtered_df[
+                    (filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)
+                ]
+        # --- CHANGE END ---
 
         fig = create_gantt_chart(filtered_df)
         st.plotly_chart(fig, use_container_width=True)
@@ -151,8 +166,12 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# (No changes to functions below this line)
+
 def create_gantt_chart(df):
+    if df.empty:
+        st.warning("No tasks match the current filter criteria.")
+        return go.Figure()
+
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description", color="GanttColor",
         color_discrete_map={
@@ -164,22 +183,27 @@ def create_gantt_chart(df):
     fig.update_layout(legend_title_text='Task Status'); fig.update_yaxes(autorange="reversed")
     return fig
 
+
 def create_network_diagram(df):
     G = nx.DiGraph()
     for _, row in df.iterrows():
         G.add_node(row['Task ID'])
         if pd.notna(row['Predecessors']) and row['Predecessors']:
+            # This regex correctly handles various delimiters like . , ; and space
             predecessors = [p.strip() for p in re.split(r'[,.\s;]+', str(row['Predecessors'])) if p]
             for p_task in predecessors:
                 if p_task in G: G.add_edge(p_task, row['Task ID'])
     try:
+        # The topological_generations function is the source of the visual layout
         generations = list(nx.topological_generations(G))
         pos = {}
         for i, generation in enumerate(generations):
+            # This logic positions nodes vertically within each generation
             y_start = (len(generation) - 1) / 2.0
             for j, node in enumerate(generation): pos[node] = (i, y_start - j)
     except nx.NetworkXUnfeasible:
-        st.warning("Cyclic dependency detected!"); pos = nx.spring_layout(G, seed=42)
+        # This fallback is for when a circular dependency is detected
+        st.warning("Cyclic dependency detected! The network diagram may not be accurate."); pos = nx.spring_layout(G, seed=42)
         
     is_large_graph = len(df) > 25
     node_size = 20 if is_large_graph else 35; standoff_dist = 12 if is_large_graph else 20
