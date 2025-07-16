@@ -7,8 +7,10 @@ from pathlib import Path
 # REMOVE this — /mnt/data already exists and is writable on Cloud
 # Path("/mnt/data").mkdir(exist_ok=True)
 
-DB_FILE = Path("/mnt/data") / "projects.db"   # safe persistent location
+DB_FILE = Path("/mount/data") / "projects.db"   # ← correct location on
+                                                #    Streamlit Cloud
 engine = create_engine(f"sqlite:///{DB_FILE}")
+
 
 
 # ── INITIALISATION ───────────────────────────────────────────────
