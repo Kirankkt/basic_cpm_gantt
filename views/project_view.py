@@ -112,7 +112,6 @@ def show_project_view():
         gantt_df['Start'] = gantt_df['ES'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         
-        # --- THE FIX: Create a new column that combines Criticality and Status ---
         def get_gantt_color(row):
             if row['On Critical Path?'] == 'Yes':
                 return 'Critical (Complete)' if row['Status'] == 'Complete' else 'Critical (Active)'
@@ -120,14 +119,16 @@ def show_project_view():
                 return 'Non-Critical (Complete)' if row['Status'] == 'Complete' else 'Non-Critical (Active)'
         gantt_df['GanttColor'] = gantt_df.apply(get_gantt_color, axis=1)
 
-
         with st.container(border=True):
             st.write("Filter Controls")
             f_col1, f_col2 = st.columns(2);
             with f_col1:
                 show_critical_only = st.checkbox("Show only critical path tasks")
-                task_list = ["All"] + sorted(gantt_df['Task Description'].tolist())
-                selected_task = st.selectbox("Search for a Specific Task", options=task_list)
+                
+                # --- THIS IS THE FIX: Changed back to multiselect ---
+                task_list = sorted(gantt_df['Task Description'].tolist())
+                selected_tasks = st.multiselect("Search for Specific Tasks", options=task_list)
+                
             with f_col2:
                 phases = sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna())))
                 selected_phases = st.multiselect("Filter by Project Phase", options=phases)
@@ -137,7 +138,11 @@ def show_project_view():
         filtered_df = gantt_df
         if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
         if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
-        if selected_task != "All": filtered_df = filtered_df[filtered_df['Task Description'] == selected_task]
+        
+        # --- THIS IS THE FIX: Changed to handle a list from multiselect ---
+        if selected_tasks:
+            filtered_df = filtered_df[filtered_df['Task Description'].isin(selected_tasks)]
+            
         if len(date_range) == 2:
             start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
             filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
@@ -149,18 +154,16 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# --- Gantt Chart Function (Modified to use the new combined color category) ---
+# (No changes to the functions below this line)
 def create_gantt_chart(df):
-    """Creates a Gantt chart using a combined category for coloring."""
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description",
-        # THE FIX: Color by the new category
         color="GanttColor",
         color_discrete_map={
             'Critical (Active)': 'red',
             'Non-Critical (Active)': 'blue',
-            'Critical (Complete)': '#F1948A',  # Lighter red
-            'Non-Critical (Complete)': '#AED6F1' # Lighter blue
+            'Critical (Complete)': '#F1948A',
+            'Non-Critical (Complete)': '#AED6F1'
         },
         hover_data=["Task ID", "Duration", "Status", "On Critical Path?"]
     )
@@ -168,7 +171,6 @@ def create_gantt_chart(df):
     fig.update_yaxes(autorange="reversed")
     return fig
 
-# --- Network Diagram Function (No changes needed) ---
 def create_network_diagram(df):
     G = nx.DiGraph()
     for _, row in df.iterrows():
