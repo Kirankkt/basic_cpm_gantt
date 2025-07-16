@@ -134,9 +134,9 @@ def show_project_view():
             with f_col1:
                 show_critical_only = st.checkbox("Show only critical path tasks")
                 
-                # --- THIS IS THE IMPROVED FILTER ---
-                task_list = ["All"] + sorted(gantt_df['Task Description'].tolist())
-                selected_task = st.selectbox("Search for a Specific Task", options=task_list)
+                # --- THIS IS THE UPGRADED FILTER ---
+                task_list = sorted(gantt_df['Task Description'].tolist())
+                selected_tasks = st.multiselect("Search for Specific Tasks by Description", options=task_list)
 
             with f_col2:
                 phases = sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna())))
@@ -148,9 +148,9 @@ def show_project_view():
         if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
         if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
         
-        # Apply the new task filter
-        if selected_task != "All":
-            filtered_df = filtered_df[filtered_df['Task Description'] == selected_task]
+        # Apply the new multi-select task filter
+        if selected_tasks:
+            filtered_df = filtered_df[filtered_df['Task Description'].isin(selected_tasks)]
             
         if len(date_range) == 2:
             start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
@@ -163,7 +163,7 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# (No changes to functions below this line)
+# (No changes to the functions below this line)
 def create_gantt_chart(df):
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description", color="On Critical Path?",
