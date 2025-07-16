@@ -7,235 +7,378 @@ import plotly.graph_objects as go
 import networkx as nx
 import re
 
-from database import get_all_projects, get_project_data_from_db, save_tasks_to_db, import_df_to_db
+from database import (
+    get_all_projects,
+    get_project_data_from_db,
+    save_tasks_to_db,
+    import_df_to_db,
+)
 from cpm_logic import calculate_cpm
 from utils import get_sample_data
 
-# --- Main View Function ---
-def show_project_view():
-    def process_uploaded_file():
-        uploaded_file = st.session_state.get("file_uploader")
-        if uploaded_file:
-            try:
-                project_name = uploaded_file.name.rsplit('.', 1)[0]
-                df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-                new_project_id = import_df_to_db(df, project_name)
 
-                st.session_state.all_projects = get_all_projects()
-                st.session_state.current_project_id = new_project_id
-                st.session_state.project_df = get_project_data_from_db(new_project_id)
-                st.session_state.cpm_results = None
-                st.success(f"Successfully imported and switched to project: {project_name}")
-            except Exception as e:
-                st.error(f"Error processing file: {e}")
+# ────────────────────────────────────────────────────────────────
+#  Main View
+# ────────────────────────────────────────────────────────────────
+def show_project_view() -> None:
+    # ── Helper callbacks ────────────────────────────────────────
+    def _process_uploaded_file() -> None:
+        uploaded = st.session_state.get("file_uploader")
+        if not uploaded:
+            return
+        try:
+            project_name = uploaded.name.rsplit(".", 1)[0]
+            df = (
+                pd.read_csv(uploaded)
+                if uploaded.name.endswith(".csv")
+                else pd.read_excel(uploaded)
+            )
+            new_id = import_df_to_db(df, project_name)
 
-    def switch_project():
-        project_name = st.session_state.project_selector
-        if project_name:
-            st.session_state.current_project_id = st.session_state.all_projects[project_name]
-            st.session_state.project_df = get_project_data_from_db(st.session_state.current_project_id)
+            st.session_state.all_projects = get_all_projects()
+            st.session_state.current_project_id = new_id
+            st.session_state.project_df = get_project_data_from_db(new_id)
+            st.session_state.cpm_results = None
+            st.success(f"Imported and switched to **{project_name}**")
+        except Exception as exc:  # pylint: disable=broad-except
+            st.error(f"Error processing file: {exc}")
+
+    def _switch_project() -> None:
+        name = st.session_state.project_selector
+        if name:
+            st.session_state.current_project_id = st.session_state.all_projects[name]
+            st.session_state.project_df = get_project_data_from_db(
+                st.session_state.current_project_id
+            )
             st.session_state.cpm_results = None
 
-    if 'all_projects' not in st.session_state: st.session_state.all_projects = get_all_projects()
-    if 'current_project_id' not in st.session_state: st.session_state.current_project_id = next(iter(st.session_state.all_projects.values()), None)
-    if 'project_df' not in st.session_state: st.session_state.project_df = get_project_data_from_db(st.session_state.current_project_id)
-    if 'cpm_results' not in st.session_state: st.session_state.cpm_results = None
+    # ── Session‑state bootstrap ─────────────────────────────────
+    if "all_projects" not in st.session_state:
+        st.session_state.all_projects = get_all_projects()
+    if "current_project_id" not in st.session_state:
+        st.session_state.current_project_id = next(
+            iter(st.session_state.all_projects.values()), None
+        )
+    if "project_df" not in st.session_state:
+        st.session_state.project_df = get_project_data_from_db(
+            st.session_state.current_project_id
+        )
+    if "cpm_results" not in st.session_state:
+        st.session_state.cpm_results = None
 
-    st.header("1. Project Selection & Setup")
+    # ── 1. Project selection & setup ────────────────────────────
+    st.header("1  Project Selection & Setup")
 
     project_names = list(st.session_state.all_projects.keys())
-    current_project_name = "No Project Selected"
-    current_index = 0
-    if st.session_state.current_project_id and project_names:
-        try:
-            current_project_name = [name for name, id_ in st.session_state.all_projects.items() if id_ == st.session_state.current_project_id][0]
-            current_index = project_names.index(current_project_name)
-        except (IndexError, ValueError):
-            if project_names: current_project_name = project_names[0]; st.session_state.current_project_id = st.session_state.all_projects[current_project_name]
+    cur_name = (
+        [
+            n
+            for n, pid in st.session_state.all_projects.items()
+            if pid == st.session_state.current_project_id
+        ][0]
+        if st.session_state.current_project_id
+        else "No Project Selected"
+    )
+    cur_idx = project_names.index(cur_name) if cur_name in project_names else 0
 
-    st.selectbox("Select Project", options=project_names, index=current_index, key="project_selector", on_change=switch_project)
+    st.selectbox(
+        "Select Project",
+        options=project_names,
+        index=cur_idx,
+        key="project_selector",
+        on_change=_switch_project,
+    )
 
     with st.expander("Import New Project or Load Sample"):
-        st.file_uploader("Upload Project File", type=['csv', 'xlsx'], key="file_uploader", on_change=process_uploaded_file)
+        st.file_uploader(
+            "Upload Project File",
+            type=["csv", "xlsx"],
+            key="file_uploader",
+            on_change=_process_uploaded_file,
+        )
         if st.button("Load Sample Data"):
-            project_name = "Default Project"; project_id = import_df_to_db(get_sample_data(), project_name)
-            st.session_state.all_projects = get_all_projects(); st.session_state.current_project_id = project_id
-            st.session_state.project_df = get_project_data_from_db(project_id); st.session_state.cpm_results = None
-            st.success(f"Sample data loaded into '{project_name}'."); st.rerun()
+            pname = "Default Project"
+            pid = import_df_to_db(get_sample_data(), pname)
+            st.session_state.all_projects = get_all_projects()
+            st.session_state.current_project_id = pid
+            st.session_state.project_df = get_project_data_from_db(pid)
+            st.session_state.cpm_results = None
+            st.success(f"Sample data loaded into **{pname}**")
+            st.rerun()
 
     start_date = st.date_input("Select Project Start Date", value=date.today())
     st.divider()
 
-    st.header("2. Task Planning & Status")
-    st.markdown("Edit tasks and update their status below. Changes are saved when you press 'Calculate & Save'.")
+    # ── 2. Task planning & status ───────────────────────────────
+    st.header("2  Task Planning & Status")
+    st.markdown(
+        "Edit tasks and update their status below. **Press “Calculate & Save”** "
+        "to persist changes."
+    )
 
     if st.session_state.project_df.empty:
-        st.warning("No data in this project."); return
+        st.warning("No data in this project.")
+        return
 
-    column_config = { "Status": st.column_config.SelectboxColumn("Task Status", options=["Not Started", "In Progress", "Complete"], required=True) }
-    edited_df = st.data_editor(st.session_state.project_df, column_config=column_config, num_rows="dynamic", use_container_width=True)
+    column_config = {
+        "Status": st.column_config.SelectboxColumn(
+            "Task Status",
+            options=["Not Started", "In Progress", "Complete"],
+            required=True,
+        )
+    }
+    edited_df = st.data_editor(
+        st.session_state.project_df,
+        column_config=column_config,
+        num_rows="dynamic",
+        use_container_width=True,
+    )
 
-    col1, col2, col3 = st.columns([1.5, 1, 3])
-    with col1:
-        if st.button("Calculate & Save Project Plan", type="primary"):
-            if edited_df['Task ID'].isnull().any() or "" in edited_df['Task ID'].values: st.error("Validation Failed: Task ID cannot be empty.")
-            elif edited_df['Task ID'].duplicated().any(): st.error("Validation Failed: Found duplicate Task IDs.")
+    col_calc, col_export, _ = st.columns([1.5, 1, 3])
+
+    with col_calc:
+        if st.button("Calculate & Save Project Plan", type="primary"):
+            # Basic validation
+            if edited_df["Task ID"].isnull().any() or "" in edited_df["Task ID"].values:
+                st.error("Task ID cannot be empty.")
+            elif edited_df["Task ID"].duplicated().any():
+                st.error("Duplicate Task IDs detected.")
             else:
                 try:
                     save_tasks_to_db(edited_df, st.session_state.current_project_id)
                     st.session_state.project_df = edited_df.copy()
-                    st.session_state.cpm_results = calculate_cpm(st.session_state.project_df.copy())
-                except ValueError: st.error("Calculation Failed: 'Duration' must be a number.")
-                except Exception as e: st.error(f"An unexpected error occurred: {e}")
-    with col2:
-        st.download_button("Export as CSV", edited_df.to_csv(index=False).encode('utf-8'), f"{current_project_name}_backup.csv", 'text/csv')
+                    st.session_state.cpm_results = calculate_cpm(
+                        st.session_state.project_df.copy()
+                    )
+                except ValueError:
+                    st.error("`Duration` must be numeric.")
+                except Exception as exc:  # pylint: disable=broad-except
+                    st.error(f"Unexpected error: {exc}")
 
-    if st.session_state.cpm_results is not None:
-        cpm_df = st.session_state.cpm_results
+    with col_export:
+        st.download_button(
+            "Export as CSV",
+            edited_df.to_csv(index=False).encode(),
+            f"{cur_name}_backup.csv",
+            "text/csv",
+        )
 
-        st.header("3. Results & Progress")
+    # ── 3. Results ──────────────────────────────────────────────
+    if st.session_state.cpm_results is None:
+        return
 
-        st.subheader("Critical Path Analysis")
-        st.dataframe(cpm_df, use_container_width=True)
+    cpm_df = st.session_state.cpm_results
 
-        with st.container(border=True):
-            total_duration = cpm_df['Duration'].sum()
-            completed_duration = cpm_df[cpm_df['Status'] == 'Complete']['Duration'].sum()
-            progress = (completed_duration / total_duration) if total_duration > 0 else 0
-            st.markdown("#### Overall Project Progress")
-            st.progress(progress, text=f"{progress:.0%} Complete")
-            p_col1, p_col2 = st.columns(2)
-            p_col1.metric("Days Completed", f"{completed_duration}", f"of {total_duration} total days")
-            p_col2.metric("Tasks Completed", f"{len(cpm_df[cpm_df['Status'] == 'Complete'])}", f"of {len(cpm_df)} total tasks")
+    st.header("3  Results & Progress")
 
-        st.subheader("Gantt Chart")
-        gantt_df = cpm_df.copy()
-        gantt_df['Start'] = gantt_df['ES'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
-        gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
+    st.subheader("Critical Path Analysis")
+    st.dataframe(cpm_df, use_container_width=True)
 
-        def get_gantt_color(row):
-            is_critical = row['On Critical Path?'] == 'Yes'; status = row['Status']
-            if is_critical: return 'Critical (Complete)' if status == 'Complete' else 'Critical (In Progress)' if status == 'In Progress' else 'Critical (Not Started)'
-            else: return 'Non-Critical (Complete)' if status == 'Complete' else 'Non-Critical (In Progress)' if status == 'In Progress' else 'Non-Critical (Not Started)'
-        gantt_df['GanttColor'] = gantt_df.apply(get_gantt_color, axis=1)
-        
-        # --- Date range for the filter should be flexible, so we set it before filtering ---
-        # Allow selecting dates outside the default range by adding a buffer
-        min_date_for_filter = gantt_df['Start'].min().date() - timedelta(days=30)
-        max_date_for_filter = gantt_df['Finish'].max().date() + timedelta(days=30)
-        
-        with st.container(border=True):
-            st.write("Filter Controls"); f_col1, f_col2 = st.columns(2)
-            with f_col1:
-                show_critical_only = st.checkbox("Show only critical path tasks")
-                selected_tasks = st.multiselect("Search for Specific Tasks", options=sorted(gantt_df['Task Description'].tolist()))
-            with f_col2:
-                selected_phases = st.multiselect("Filter by Project Phase", options=sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna()))))
-                date_range = st.date_input("Filter by Date Range", 
-                                           value=(gantt_df['Start'].min().date(), gantt_df['Finish'].max().date()), 
-                                           min_value=min_date_for_filter, 
-                                           max_value=max_date_for_filter)
+    # ▸ Overall progress bar
+    with st.container(border=True):
+        total_dur = cpm_df["Duration"].sum()
+        done_dur = cpm_df[cpm_df["Status"] == "Complete"]["Duration"].sum()
+        prog = done_dur / total_dur if total_dur else 0
+        st.markdown("#### Overall Project Progress")
+        st.progress(prog, text=f"{prog:.0%} Complete")
+        m1, m2 = st.columns(2)
+        m1.metric("Days Completed", f"{done_dur}", f"of {total_dur}")
+        m2.metric(
+            "Tasks Completed",
+            f"{(cpm_df['Status'] == 'Complete').sum()}",
+            f"of {len(cpm_df)}",
+        )
 
-        # --- CHANGE START: Corrected Filtering Logic ---
-        # This new logic block correctly prioritizes the specific task search over the general filters.
-        if selected_tasks:
-            # If the user hand-picks tasks, THIS IS THE ONLY filter that should apply.
-            # We ignore the other filters to ensure the selected tasks always appear.
-            filtered_df = gantt_df[gantt_df['Task Description'].isin(selected_tasks)]
-        else:
-            # If no specific tasks are selected, then we apply the general filters as a waterfall.
-            filtered_df = gantt_df
-            if show_critical_only:
-                filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
-            if selected_phases:
-                # Ensure starts_with works with a tuple of selections
-                filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
-            if len(date_range) == 2:
-                start_filter = pd.to_datetime(date_range[0])
-                end_filter = pd.to_datetime(date_range[1])
-                # This logic correctly finds any task that "touches" the date range.
-                filtered_df = filtered_df[
-                    (filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)
-                ]
-        # --- CHANGE END ---
-
-        fig = create_gantt_chart(filtered_df)
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("CPM Network Diagram")
-        network_fig = create_network_diagram(cpm_df)
-        st.plotly_chart(network_fig, use_container_width=True)
-
-
-def create_gantt_chart(df):
-    if df.empty:
-        st.warning("No tasks match the current filter criteria.")
-        return go.Figure()
-
-    fig = px.timeline(
-        df, x_start="Start", x_end="Finish", y="Task Description", color="GanttColor",
-        color_discrete_map={
-            'Critical (In Progress)': '#E74C3C', 'Critical (Not Started)': '#CD5C5C', 'Critical (Complete)': '#F5B7B1',
-            'Non-Critical (In Progress)': '#3498DB', 'Non-Critical (Not Started)': '#4169E1', 'Non-Critical (Complete)': '#AED6F1',
-        },
-        hover_data=["Task ID", "Duration", "Status", "On Critical Path?"]
+    # ▸ Build calendar dates for Gantt
+    gantt_df = cpm_df.copy()
+    gantt_df["Start"] = pd.to_datetime(start_date) + pd.to_timedelta(
+        gantt_df["ES"] - 1, unit="D"
     )
-    fig.update_layout(legend_title_text='Task Status'); fig.update_yaxes(autorange="reversed")
+    # NEW: ensure at least one‑day span
+    gantt_df["Finish"] = gantt_df["Start"] + pd.to_timedelta(
+        gantt_df["Duration"], unit="D"
+    )
+
+    def _g_color(row):
+        critical = row["On Critical Path?"] == "Yes"
+        stt = row["Status"]
+        if critical:
+            return (
+                "Critical (Complete)"
+                if stt == "Complete"
+                else "Critical (In Progress)"
+                if stt == "In Progress"
+                else "Critical (Not Started)"
+            )
+        return (
+            "Non-Critical (Complete)"
+            if stt == "Complete"
+            else "Non-Critical (In Progress)"
+            if stt == "In Progress"
+            else "Non-Critical (Not Started)"
+        )
+
+    gantt_df["GanttColor"] = gantt_df.apply(_g_color, axis=1)
+
+    # ▸ Filter controls
+    st.write("Filter Controls")
+    fc1, fc2 = st.columns(2)
+
+    with fc1:
+        show_crit_only = st.checkbox("Show only critical path tasks")
+        sel_tasks = st.multiselect(
+            "Search for Specific Tasks", options=sorted(gantt_df["Task Description"])
+        )
+    with fc2:
+        sel_phases = st.multiselect(
+            "Filter by Project Phase",
+            options=sorted({t.split("-")[0] for t in gantt_df["Task ID"]}),
+        )
+        # expand date picker window a bit
+        buffer = timedelta(days=14)
+        min_date = (gantt_df["Start"].min() - buffer).date()
+        max_date = (gantt_df["Finish"].max() + buffer).date()
+        date_rng = st.date_input(
+            "Filter by Date Range",
+            value=(min_date, max_date),
+        )
+
+    # ▸ Apply filters
+    if sel_tasks:
+        filt_df = gantt_df[gantt_df["Task Description"].isin(sel_tasks)]
+    else:
+        filt_df = gantt_df.copy()
+        if show_crit_only:
+            filt_df = filt_df[filt_df["On Critical Path?"] == "Yes"]
+        if sel_phases:
+            filt_df = filt_df[filt_df["Task ID"].str.startswith(tuple(sel_phases))]
+        if len(date_rng) == 2:
+            d0, d1 = map(pd.to_datetime, date_rng)
+            filt_df = filt_df[(filt_df["Start"] <= d1) & (filt_df["Finish"] >= d0)]
+
+    st.plotly_chart(create_gantt_chart(filt_df), use_container_width=True)
+
+    st.subheader("CPM Network Diagram")
+    st.plotly_chart(create_network_diagram(cpm_df), use_container_width=True)
+
+
+# ────────────────────────────────────────────────────────────────
+#  Plot helpers (Gantt & Network)
+# ────────────────────────────────────────────────────────────────
+def create_gantt_chart(df: pd.DataFrame) -> go.Figure:
+    fig = px.timeline(
+        df,
+        x_start="Start",
+        x_end="Finish",
+        y="Task Description",
+        color="GanttColor",
+        hover_data=["Task ID", "Duration", "Status", "On Critical Path?"],
+        color_discrete_map={
+            "Critical (In Progress)": "#E74C3C",
+            "Critical (Not Started)": "#CD5C5C",
+            "Critical (Complete)": "#F5B7B1",
+            "Non-Critical (In Progress)": "#3498DB",
+            "Non-Critical (Not Started)": "#4169E1",
+            "Non-Critical (Complete)": "#AED6F1",
+        },
+    )
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(legend_title_text="Task Status")
     return fig
 
 
-def create_network_diagram(df):
+def create_network_diagram(df: pd.DataFrame) -> go.Figure:
     G = nx.DiGraph()
     for _, row in df.iterrows():
-        G.add_node(row['Task ID'])
-        if pd.notna(row['Predecessors']) and row['Predecessors']:
-            # This regex correctly handles various delimiters like . , ; and space
-            predecessors = [p.strip() for p in re.split(r'[,.\s;]+', str(row['Predecessors'])) if p]
-            for p_task in predecessors:
-                if p_task in G: G.add_edge(p_task, row['Task ID'])
+        G.add_node(row["Task ID"])
+        if pd.notna(row["Predecessors"]) and row["Predecessors"]:
+            preds = [
+                p.strip()
+                for p in re.split(r"[,\s;]+", str(row["Predecessors"]))
+                if p.strip()
+            ]
+            for p_task in preds:
+                G.add_edge(p_task, row["Task ID"])
+
+    # Layout: try topological generations first
     try:
-        # The topological_generations function is the source of the visual layout
         generations = list(nx.topological_generations(G))
-        pos = {}
-        for i, generation in enumerate(generations):
-            # This logic positions nodes vertically within each generation
-            y_start = (len(generation) - 1) / 2.0
-            for j, node in enumerate(generation): pos[node] = (i, y_start - j)
-    except nx.NetworkXUnfeasible:
-        # This fallback is for when a circular dependency is detected
-        st.warning("Cyclic dependency detected! The network diagram may not be accurate."); pos = nx.spring_layout(G, seed=42)
-        
-    is_large_graph = len(df) > 25
-    node_size = 20 if is_large_graph else 35; standoff_dist = 12 if is_large_graph else 20
-    text_inside_node = "" if is_large_graph else [f"<b>{node}</b>" for node in G.nodes()]
+        pos = {
+            node: (i, (len(gen) - 1) / 2.0 - j)
+            for i, gen in enumerate(generations)
+            for j, node in enumerate(gen)
+        }
+    except nx.NetworkXUnfeasible:  # cyclic
+        st.warning("Cyclic dependency detected!")
+        pos = nx.spring_layout(G, seed=42)
+
+    is_large = len(G) > 25
+    node_size = 20 if is_large else 35
+    text_inside = "" if is_large else [f"<b>{n}</b>" for n in G.nodes()]
+
     node_trace = go.Scatter(
-        x=[pos[n][0] for n in G.nodes() if n in pos], y=[pos[n][1] for n in G.nodes() if n in pos],
-        mode='markers' if is_large_graph else 'markers+text', text=text_inside_node, textposition="middle center", 
-        hoverinfo='text', marker=dict(size=node_size, line=dict(width=1, color='Black'))
+        x=[pos[n][0] for n in G.nodes()],
+        y=[pos[n][1] for n in G.nodes()],
+        mode="markers" if is_large else "markers+text",
+        text=text_inside,
+        textposition="middle center",
+        hoverinfo="text",
+        marker=dict(size=node_size, line=dict(width=1, color="Black")),
     )
-    node_colors, node_hover_text = [], []
+
+    colors, hovers = [], []
     for node in G.nodes():
-        if node in pos:
-            task_info = df[df['Task ID'] == node]
-            if not task_info.empty:
-                is_critical = task_info['On Critical Path?'].iloc[0]
-                node_colors.append('red' if is_critical == 'Yes' else 'skyblue')
-                node_hover_text.append(f"Task: {node}<br>Desc: {task_info['Task Description'].iloc[0]}<br>Duration: {task_info['Duration'].iloc[0]}")
-            else:
-                node_colors.append('grey'); node_hover_text.append(f"Task: {node} (Missing)")
-    node_trace.marker.color = node_colors; node_trace.hovertext = node_hover_text
-    node_trace.textfont = dict(color='white', size=10)
-    arrow_annotations = []
-    for edge in G.edges():
-        if edge[0] in pos and edge[1] in pos:
-            pos_start, pos_end = pos[edge[0]], pos[edge[1]]
-            arrow_annotations.append(go.layout.Annotation(dict(ax=pos_start[0], ay=pos_start[1], x=pos_end[0], y=pos_end[1], xref='x', yref='y', axref='x', ayref='y', showarrow=True, arrowhead=2, arrowsize=1.5, arrowwidth=1, arrowcolor='#888', standoff=standoff_dist)))
-    layout = go.Layout(
-        title=dict(text='CPM Network Diagram', font=dict(size=16)), showlegend=False, hovermode='closest', 
-        margin=dict(b=20, l=5, r=5, t=40),
-        xaxis=dict(title='Project Sequence Level', showgrid=False, zeroline=False, showticklabels=True),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        annotations=arrow_annotations
+        task = df[df["Task ID"] == node]
+        if not task.empty:
+            crit = task["On Critical Path?"].iloc[0] == "Yes"
+            colors.append("red" if crit else "skyblue")
+            hovers.append(
+                f"Task: {node}<br>"
+                f"Desc: {task['Task Description'].iloc[0]}<br>"
+                f"Duration: {task['Duration'].iloc[0]}"
+            )
+        else:
+            colors.append("grey")
+            hovers.append(f"Task: {node} (Missing)")
+    node_trace.marker.color = colors
+    node_trace.hovertext = hovers
+    node_trace.textfont = dict(color="white", size=10)
+
+    # Edges as arrows
+    arrows = []
+    standoff = 12 if is_large else 20
+    for a, b in G.edges():
+        arrows.append(
+            go.layout.Annotation(
+                ax=pos[a][0],
+                ay=pos[a][1],
+                x=pos[b][0],
+                y=pos[b][1],
+                xref="x",
+                yref="y",
+                axref="x",
+                ayref="y",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1.5,
+                arrowwidth=1,
+                arrowcolor="#888",
+                standoff=standoff,
+            )
+        )
+
+    fig = go.Figure(
+        data=[node_trace],
+        layout=go.Layout(
+            title=dict(text="CPM Network Diagram", font=dict(size=16)),
+            showlegend=False,
+            hovermode="closest",
+            margin=dict(t=40, b=20, l=5, r=5),
+            xaxis=dict(
+                title="Project Sequence Level", showgrid=False, zeroline=False
+            ),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            annotations=arrows,
+        ),
     )
-    fig = go.Figure(data=[node_trace], layout=layout)
     return fig
