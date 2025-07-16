@@ -112,23 +112,28 @@ def show_project_view():
         gantt_df['Start'] = gantt_df['ES'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         
+        # --- THE FIX: Create a new column that combines Criticality and Status ---
         def get_gantt_color(row):
-            if row['On Critical Path?'] == 'Yes':
-                return 'Critical (Complete)' if row['Status'] == 'Complete' else 'Critical (Active)'
+            is_critical = row['On Critical Path?'] == 'Yes'
+            status = row['Status']
+            if is_critical:
+                if status == 'Complete': return 'Critical (Complete)'
+                elif status == 'In Progress': return 'Critical (In Progress)'
+                else: return 'Critical (Not Started)'
             else:
-                return 'Non-Critical (Complete)' if row['Status'] == 'Complete' else 'Non-Critical (Active)'
+                if status == 'Complete': return 'Non-Critical (Complete)'
+                elif status == 'In Progress': return 'Non-Critical (In Progress)'
+                else: return 'Non-Critical (Not Started)'
         gantt_df['GanttColor'] = gantt_df.apply(get_gantt_color, axis=1)
+
 
         with st.container(border=True):
             st.write("Filter Controls")
             f_col1, f_col2 = st.columns(2);
             with f_col1:
                 show_critical_only = st.checkbox("Show only critical path tasks")
-                
-                # --- THIS IS THE FIX: Changed back to multiselect ---
                 task_list = sorted(gantt_df['Task Description'].tolist())
                 selected_tasks = st.multiselect("Search for Specific Tasks", options=task_list)
-                
             with f_col2:
                 phases = sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna())))
                 selected_phases = st.multiselect("Filter by Project Phase", options=phases)
@@ -138,11 +143,7 @@ def show_project_view():
         filtered_df = gantt_df
         if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
         if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
-        
-        # --- THIS IS THE FIX: Changed to handle a list from multiselect ---
-        if selected_tasks:
-            filtered_df = filtered_df[filtered_df['Task Description'].isin(selected_tasks)]
-            
+        if selected_tasks: filtered_df = filtered_df[filtered_df['Task Description'].isin(selected_tasks)]
         if len(date_range) == 2:
             start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
             filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
@@ -154,16 +155,20 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# (No changes to the functions below this line)
+# --- Gantt Chart Function (Modified to use the new 6-state color map) ---
 def create_gantt_chart(df):
+    """Creates a Gantt chart using a combined category for coloring."""
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description",
+        # THE FIX: Color by the new 6-state category
         color="GanttColor",
         color_discrete_map={
-            'Critical (Active)': 'red',
-            'Non-Critical (Active)': 'blue',
-            'Critical (Complete)': '#F1948A',
-            'Non-Critical (Complete)': '#AED6F1'
+            'Critical (In Progress)': '#E74C3C',        # Vibrant Red
+            'Critical (Not Started)': '#CD5C5C',        # Standard Red (IndianRed)
+            'Critical (Complete)': '#F5B7B1',           # Light Red
+            'Non-Critical (In Progress)': '#3498DB',     # Vibrant Blue
+            'Non-Critical (Not Started)': '#4169E1',     # Standard Blue (RoyalBlue)
+            'Non-Critical (Complete)': '#AED6F1',        # Light Blue
         },
         hover_data=["Task ID", "Duration", "Status", "On Critical Path?"]
     )
@@ -171,6 +176,7 @@ def create_gantt_chart(df):
     fig.update_yaxes(autorange="reversed")
     return fig
 
+# --- Network Diagram Function (No changes needed) ---
 def create_network_diagram(df):
     G = nx.DiGraph()
     for _, row in df.iterrows():
@@ -192,7 +198,7 @@ def create_network_diagram(df):
     node_size = 20 if is_large_graph else 35; standoff_dist = 12 if is_large_graph else 20
     text_inside_node = "" if is_large_graph else [f"<b>{node}</b>" for node in G.nodes()]
     node_trace = go.Scatter(
-        x=[pos[n][0] for n in G.nodes() if n in pos], y=[pos[n][1] for n in G.nodes() if n in pos],
+        x=[pos[n][0] for n in G.nodes() if n in pos], y=[pos[n][1] for n in G.nosdes() if n in pos],
         mode='markers' if is_large_graph else 'markers+text', text=text_inside_node, textposition="middle center", 
         hoverinfo='text', marker=dict(size=node_size, line=dict(width=1, color='Black'))
     )
