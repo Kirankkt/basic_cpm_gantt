@@ -129,12 +129,12 @@ def show_project_view():
                 min_date, max_date = gantt_df['Start'].min().date(), gantt_df['Finish'].max().date()
                 date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
-        # --- THE DEFINITIVE FIX to the filtering logic ---
+        # --- THE FINAL, CORRECT FILTERING LOGIC ---
         if selected_tasks:
-            # If the user hand-picks tasks, THIS IS THE ONLY FILTER THAT APPLIES.
+            # If the user hand-picks tasks, THIS IS THE ONLY filter that applies.
             filtered_df = gantt_df[gantt_df['Task Description'].isin(selected_tasks)]
         else:
-            # Otherwise, apply the general filters in a waterfall.
+            # Otherwise, apply the general filters as a waterfall.
             filtered_df = gantt_df
             if show_critical_only:
                 filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
