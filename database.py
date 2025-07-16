@@ -1,29 +1,34 @@
 # database.py
 import pandas as pd
 from sqlalchemy import create_engine, inspect, text
+from pathlib import Path
 
-# --- DATABASE SETUP ---
-DB_FILE = "projects.db"
+# ── DATABASE SETUP ───────────────────────────────────────────────
+Path("/mnt/data").mkdir(exist_ok=True)        # local safety; no‑op on Cloud
+DB_FILE = Path("/mnt/data") / "projects.db"   # lives on the persistent volume
 engine = create_engine(f"sqlite:///{DB_FILE}")
 
-def initialize_database():
-    """Initializes the database. Creates/updates tables as needed."""
-    with engine.connect() as connection:
+# ── INITIALISATION ───────────────────────────────────────────────
+def initialize_database() -> None:
+    """Create / patch tables as needed."""
+    with engine.connect() as conn:
         if not inspect(engine).has_table("projects"):
-            connection.execute(text("""
+            conn.execute(text("""
                 CREATE TABLE projects (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE
+                    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT    NOT NULL UNIQUE
                 );
             """))
-            connection.execute(text("INSERT INTO projects (name) VALUES ('Default Project')"))
-            connection.commit()
-            print("Database initialized and 'projects' table created.")
+            conn.execute(text(
+                "INSERT INTO projects (name) VALUES ('Default Project')"
+            ))
+            conn.commit()
+            print("Created 'projects' table.")
 
         if not inspect(engine).has_table("tasks"):
-            connection.execute(text("""
+            conn.execute(text("""
                 CREATE TABLE tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
                     project_id INTEGER NOT NULL,
                     task_id_str TEXT NOT NULL,
                     description TEXT NOT NULL,
@@ -33,74 +38,92 @@ def initialize_database():
                     FOREIGN KEY (project_id) REFERENCES projects (id)
                 );
             """))
-            print("'tasks' table created.")
+            print("Created 'tasks' table.")
         else:
-            # --- MINIMAL CHANGE: Add status column if it doesn't exist ---
-            inspector = inspect(engine)
-            columns = [col['name'] for col in inspector.get_columns('tasks')]
-            if 'status' not in columns:
-                connection.execute(text("ALTER TABLE tasks ADD COLUMN status TEXT DEFAULT 'Not Started'"))
-                connection.commit()
-                print("Added 'status' column to tasks table.")
+            cols = [c["name"] for c in inspect(engine).get_columns("tasks")]
+            if "status" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE tasks ADD COLUMN status TEXT "
+                    "DEFAULT 'Not Started'"
+                ))
+                conn.commit()
+                print("Added 'status' column.")
 
-def get_all_projects():
-    with engine.connect() as connection:
-        result = connection.execute(text("SELECT id, name FROM projects ORDER BY name"))
-        return {name: id for id, name in result}
+# ── SIMPLE HELPERS ───────────────────────────────────────────────
+def get_all_projects() -> dict[str, int]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT id, name FROM projects ORDER BY name")
+        )
+        return {name: pid for pid, name in rows}
 
-def get_project_data_from_db(project_id):
+def get_project_data_from_db(project_id: int) -> pd.DataFrame:
     if project_id is None:
         return pd.DataFrame()
-    # Add status to the SELECT query
-    query = text("""
-        SELECT task_id_str as "Task ID", description as "Task Description", 
-               predecessors as "Predecessors", duration as "Duration",
-               status as "Status"
-        FROM tasks 
-        WHERE project_id = :proj_id
+    q = text("""
+        SELECT task_id_str  AS "Task ID",
+               description  AS "Task Description",
+               predecessors AS "Predecessors",
+               duration     AS "Duration",
+               status       AS "Status"
+        FROM tasks
+        WHERE project_id = :pid
     """)
-    with engine.connect() as connection:
-        df = pd.read_sql(query, connection, params={"proj_id": project_id})
-    return df
+    with engine.connect() as conn:
+        return pd.read_sql(q, conn, params={"pid": project_id})
 
-def import_df_to_db(df, project_name):
-    with engine.connect() as connection:
-        res = connection.execute(text("SELECT id FROM projects WHERE name = :name"), {"name": project_name}).first()
-        if res:
-            project_id = res[0]
-        else:
-            insert_res = connection.execute(text("INSERT INTO projects (name) VALUES (:name)"), {"name": project_name})
-            project_id = insert_res.lastrowid
+# ── IMPORT / SAVE OPERATIONS ─────────────────────────────────────
+def import_df_to_db(df: pd.DataFrame, project_name: str) -> int:
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT id FROM projects WHERE name = :n"), {"n": project_name}
+        ).first()
+        project_id = row[0] if row else conn.execute(
+            text("INSERT INTO projects (name) VALUES (:n)"), {"n": project_name}
+        ).lastrowid
 
         df_to_save = df.copy()
-        # Ensure status column exists in the uploaded file, if not, add it
         if "Status" not in df_to_save.columns:
-            df_to_save['Status'] = 'Not Started'
-        
-        required_cols = ["Task ID", "Task Description", "Predecessors", "Duration", "Status"]
-        df_to_save['project_id'] = project_id
-        df_to_save = df_to_save.rename(columns={
-            "Task ID": "task_id_str", "Task Description": "description",
-            "Predecessors": "predecessors", "Duration": "duration", "Status": "status"
-        })
-        db_cols = ["project_id", "task_id_str", "description", "predecessors", "duration", "status"]
-        df_to_save = df_to_save[db_cols]
+            df_to_save["Status"] = "Not Started"
 
-        connection.execute(text("DELETE FROM tasks WHERE project_id = :proj_id"), {"proj_id": project_id})
-        df_to_save.to_sql("tasks", con=connection, if_exists="append", index=False)
-        connection.commit()
+        df_to_save["project_id"] = project_id
+        df_to_save = df_to_save.rename(columns={
+            "Task ID":        "task_id_str",
+            "Task Description":"description",
+            "Predecessors":   "predecessors",
+            "Duration":       "duration",
+            "Status":         "status"
+        })[
+            ["project_id", "task_id_str", "description",
+             "predecessors", "duration", "status"]
+        ]
+
+        conn.execute(
+            text("DELETE FROM tasks WHERE project_id = :pid"),
+            {"pid": project_id},
+        )
+        df_to_save.to_sql("tasks", conn, if_exists="append", index=False)
+        conn.commit()
     return project_id
 
-def save_tasks_to_db(df, project_id):
+def save_tasks_to_db(df: pd.DataFrame, project_id: int) -> None:
     df_to_save = df.copy()
-    df_to_save['project_id'] = project_id
+    df_to_save["project_id"] = project_id
     df_to_save = df_to_save.rename(columns={
-        "Task ID": "task_id_str", "Task Description": "description",
-        "Predecessors": "predecessors", "Duration": "duration", "Status": "status"
-    })
-    db_cols = ["project_id", "task_id_str", "description", "predecessors", "duration", "status"]
-    
-    with engine.connect() as connection:
-        connection.execute(text("DELETE FROM tasks WHERE project_id = :proj_id"), {"proj_id": project_id})
-        df_to_save[db_cols].to_sql("tasks", con=connection, if_exists="append", index=False)
-        connection.commit()
+        "Task ID":        "task_id_str",
+        "Task Description":"description",
+        "Predecessors":   "predecessors",
+        "Duration":       "duration",
+        "Status":         "status"
+    })[
+        ["project_id", "task_id_str", "description",
+         "predecessors", "duration", "status"]
+    ]
+
+    with engine.connect() as conn:
+        conn.execute(
+            text("DELETE FROM tasks WHERE project_id = :pid"),
+            {"pid": project_id},
+        )
+        df_to_save.to_sql("tasks", conn, if_exists="append", index=False)
+        conn.commit()
