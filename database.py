@@ -22,7 +22,17 @@ engine = create_engine(DB_URL, pool_pre_ping=True, echo=False)
 # ── INITIALISATION ──────────────────────────────────────────────
 def initialize_database() -> None:
     """Create or patch tables inside Postgres."""
-    with engine.begin() as conn:           # BEGIN … COMMIT automatically
+    with engine.begin() as conn:
+
+        # ── Clean up orphaned sequences (once) ──────────────────────
+        # projects
+        if not inspect(conn).has_table("projects"):
+            conn.execute(text("DROP SEQUENCE IF EXISTS projects_id_seq CASCADE"))
+        # tasks
+        if not inspect(conn).has_table("tasks"):
+            conn.execute(text("DROP SEQUENCE IF EXISTS tasks_id_seq CASCADE"))
+
+        # ── Projects table ───────────────────────────────────────────
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS projects (
                 id   SERIAL PRIMARY KEY,
@@ -30,6 +40,7 @@ def initialize_database() -> None:
             );
         """))
 
+        # ── Tasks table ──────────────────────────────────────────────
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id           SERIAL PRIMARY KEY,
@@ -43,12 +54,11 @@ def initialize_database() -> None:
             );
         """))
 
-        # add `status` column if the table predates it
+        # add status column if the table predates it
         cols = [c["name"] for c in inspect(conn).get_columns("tasks")]
         if "status" not in cols:
             conn.execute(text(
-                "ALTER TABLE tasks ADD COLUMN status TEXT "
-                "DEFAULT 'Not Started';"
+                "ALTER TABLE tasks ADD COLUMN status TEXT DEFAULT 'Not Started';"
             ))
 
 # ── QUERY HELPERS ───────────────────────────────────────────────
