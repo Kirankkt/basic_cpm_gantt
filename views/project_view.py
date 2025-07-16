@@ -92,10 +92,15 @@ def show_project_view():
     with col2:
         st.download_button("Export as CSV", edited_df.to_csv(index=False).encode('utf-8'), f"{current_project_name}_backup.csv", 'text/csv')
 
+    # --- Results Display Block ---
     if st.session_state.cpm_results is not None:
         cpm_df = st.session_state.cpm_results
         
         st.header("3. Results & Progress")
+
+        # --- THIS IS THE FIX: Add the subheader and dataframe back ---
+        st.subheader("Critical Path Analysis")
+        st.dataframe(cpm_df)
         
         with st.container(border=True):
             total_duration = cpm_df['Duration'].sum()
@@ -138,13 +143,18 @@ def show_project_view():
                 min_date, max_date = gantt_df['Start'].min().date(), gantt_df['Finish'].max().date()
                 date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
-        filtered_df = gantt_df
-        if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
-        if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
-        if selected_tasks: filtered_df = filtered_df[filtered_df['Task Description'].isin(selected_tasks)]
-        if len(date_range) == 2:
-            start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
-            filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
+        # --- THIS IS THE FIX: Prioritize the specific task filter ---
+        if selected_tasks:
+            # If user hand-picks tasks, ignore all other filters
+            filtered_df = gantt_df[gantt_df['Task Description'].isin(selected_tasks)]
+        else:
+            # Otherwise, apply the general filters
+            filtered_df = gantt_df
+            if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
+            if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
+            if len(date_range) == 2:
+                start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+                filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
 
         fig = create_gantt_chart(filtered_df)
         st.plotly_chart(fig, use_container_width=True)
@@ -153,7 +163,7 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# (No changes to the create_gantt_chart function)
+# (No changes to functions below this line)
 def create_gantt_chart(df):
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description",
@@ -172,7 +182,6 @@ def create_gantt_chart(df):
     fig.update_yaxes(autorange="reversed")
     return fig
 
-# --- Network Diagram Function (Typo corrected) ---
 def create_network_diagram(df):
     G = nx.DiGraph()
     for _, row in df.iterrows():
@@ -194,9 +203,7 @@ def create_network_diagram(df):
     node_size = 20 if is_large_graph else 35; standoff_dist = 12 if is_large_graph else 20
     text_inside_node = "" if is_large_graph else [f"<b>{node}</b>" for node in G.nodes()]
     node_trace = go.Scatter(
-        x=[pos[n][0] for n in G.nodes() if n in pos], 
-        # THIS IS THE FIX
-        y=[pos[n][1] for n in G.nodes() if n in pos],
+        x=[pos[n][0] for n in G.nodes() if n in pos], y=[pos[n][1] for n in G.nodes() if n in pos],
         mode='markers' if is_large_graph else 'markers+text', text=text_inside_node, textposition="middle center", 
         hoverinfo='text', marker=dict(size=node_size, line=dict(width=1, color='Black'))
     )
