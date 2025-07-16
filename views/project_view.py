@@ -112,8 +112,14 @@ def show_project_view():
         gantt_df['Start'] = gantt_df['ES'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         
-        # --- THE FIX: Create a new column for the pattern ---
-        gantt_df['Pattern'] = gantt_df['On Critical Path?'].apply(lambda x: '/' if x == 'Yes' else '')
+        # --- THE FIX: Create a new column that combines Criticality and Status ---
+        def get_gantt_color(row):
+            if row['On Critical Path?'] == 'Yes':
+                return 'Critical (Complete)' if row['Status'] == 'Complete' else 'Critical (Active)'
+            else:
+                return 'Non-Critical (Complete)' if row['Status'] == 'Complete' else 'Non-Critical (Active)'
+        gantt_df['GanttColor'] = gantt_df.apply(get_gantt_color, axis=1)
+
 
         with st.container(border=True):
             st.write("Filter Controls")
@@ -143,23 +149,22 @@ def show_project_view():
         network_fig = create_network_diagram(cpm_df)
         st.plotly_chart(network_fig, use_container_width=True)
 
-# --- Gantt Chart Function (Modified to use both Color and Pattern) ---
+# --- Gantt Chart Function (Modified to use the new combined color category) ---
 def create_gantt_chart(df):
-    """Creates a Gantt chart from a DataFrame, now coloring by Status and patterning by Critical Path."""
+    """Creates a Gantt chart using a combined category for coloring."""
     fig = px.timeline(
         df, x_start="Start", x_end="Finish", y="Task Description",
-        color="Status",
-        # --- THE FIX: Add the pattern argument ---
-        pattern_shape="Pattern",
+        # THE FIX: Color by the new category
+        color="GanttColor",
         color_discrete_map={
-            "Not Started": "grey",
-            "In Progress": "blue",
-            "Complete": "green"
+            'Critical (Active)': 'red',
+            'Non-Critical (Active)': 'blue',
+            'Critical (Complete)': '#F1948A',  # Lighter red
+            'Non-Critical (Complete)': '#AED6F1' # Lighter blue
         },
-        hover_data=["Task ID", "Duration", "ES", "EF", "LS", "LF", "Float", "On Critical Path?"]
+        hover_data=["Task ID", "Duration", "Status", "On Critical Path?"]
     )
-    # This ensures the legend for the pattern is clean
-    fig.update_layout(legend_title_text='Status & Critical Path')
+    fig.update_layout(legend_title_text='Task Status')
     fig.update_yaxes(autorange="reversed")
     return fig
 
