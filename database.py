@@ -44,7 +44,7 @@ def initialize_database() -> None:
         """))
 
         # add `status` column if the table predates it
-        cols = [c.name for c in inspect(conn).get_columns("tasks")]
+        cols = [c["name"] for c in inspect(conn).get_columns("tasks")]
         if "status" not in cols:
             conn.execute(text(
                 "ALTER TABLE tasks ADD COLUMN status TEXT "
