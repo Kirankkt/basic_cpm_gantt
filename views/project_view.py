@@ -72,9 +72,7 @@ def show_project_view():
     if st.session_state.project_df.empty:
         st.warning("No data in this project."); return
 
-    column_config = {
-        "Status": st.column_config.SelectboxColumn("Task Status", options=["Not Started", "In Progress", "Complete"], required=True)
-    }
+    column_config = { "Status": st.column_config.SelectboxColumn("Task Status", options=["Not Started", "In Progress", "Complete"], required=True) }
     edited_df = st.data_editor(st.session_state.project_df, column_config=column_config, num_rows="dynamic", use_container_width=True)
     
     col1, col2, col3 = st.columns([1.5, 1, 3])
@@ -92,15 +90,14 @@ def show_project_view():
     with col2:
         st.download_button("Export as CSV", edited_df.to_csv(index=False).encode('utf-8'), f"{current_project_name}_backup.csv", 'text/csv')
 
-    # --- Results Display Block ---
     if st.session_state.cpm_results is not None:
         cpm_df = st.session_state.cpm_results
         
         st.header("3. Results & Progress")
-
-        # --- THIS IS THE FIX: Add the subheader and dataframe back ---
+        
+        # --- FIX #1: The main results table is restored ---
         st.subheader("Critical Path Analysis")
-        st.dataframe(cpm_df)
+        st.dataframe(cpm_df, use_container_width=True)
         
         with st.container(border=True):
             total_duration = cpm_df['Duration'].sum()
@@ -118,42 +115,29 @@ def show_project_view():
         gantt_df['Finish'] = gantt_df['EF'].apply(lambda x: pd.to_datetime(start_date) + timedelta(days=int(x - 1)))
         
         def get_gantt_color(row):
-            is_critical = row['On Critical Path?'] == 'Yes'
-            status = row['Status']
-            if is_critical:
-                if status == 'Complete': return 'Critical (Complete)'
-                elif status == 'In Progress': return 'Critical (In Progress)'
-                else: return 'Critical (Not Started)'
-            else:
-                if status == 'Complete': return 'Non-Critical (Complete)'
-                elif status == 'In Progress': return 'Non-Critical (In Progress)'
-                else: return 'Non-Critical (Not Started)'
+            is_critical = row['On Critical Path?'] == 'Yes'; status = row['Status']
+            if is_critical: return 'Critical (Complete)' if status == 'Complete' else 'Critical (In Progress)' if status == 'In Progress' else 'Critical (Not Started)'
+            else: return 'Non-Critical (Complete)' if status == 'Complete' else 'Non-Critical (In Progress)' if status == 'In Progress' else 'Non-Critical (Not Started)'
         gantt_df['GanttColor'] = gantt_df.apply(get_gantt_color, axis=1)
 
         with st.container(border=True):
-            st.write("Filter Controls")
-            f_col1, f_col2 = st.columns(2);
+            st.write("Filter Controls"); f_col1, f_col2 = st.columns(2)
             with f_col1:
                 show_critical_only = st.checkbox("Show only critical path tasks")
-                task_list = sorted(gantt_df['Task Description'].tolist())
-                selected_tasks = st.multiselect("Search for Specific Tasks", options=task_list)
+                selected_tasks = st.multiselect("Search for Specific Tasks", options=sorted(gantt_df['Task Description'].tolist()))
             with f_col2:
-                phases = sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna())))
-                selected_phases = st.multiselect("Filter by Project Phase", options=phases)
+                selected_phases = st.multiselect("Filter by Project Phase", options=sorted(list(set(gantt_df['Task ID'].str.split('-').str[0].dropna()))))
                 min_date, max_date = gantt_df['Start'].min().date(), gantt_df['Finish'].max().date()
                 date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
-        # --- THIS IS THE FIX: Prioritize the specific task filter ---
-        if selected_tasks:
-            # If user hand-picks tasks, ignore all other filters
-            filtered_df = gantt_df[gantt_df['Task Description'].isin(selected_tasks)]
-        else:
-            # Otherwise, apply the general filters
-            filtered_df = gantt_df
-            if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
-            if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
-            if len(date_range) == 2:
-                start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+        # --- FIX #2: The filtering logic is now a simple, robust waterfall ---
+        filtered_df = gantt_df
+        if show_critical_only: filtered_df = filtered_df[filtered_df['On Critical Path?'] == 'Yes']
+        if selected_phases: filtered_df = filtered_df[filtered_df['Task ID'].str.startswith(tuple(selected_phases))]
+        if selected_tasks: filtered_df = filtered_df[filtered_df['Task Description'].isin(selected_tasks)]
+        if len(date_range) == 2:
+            start_filter, end_filter = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+            if not selected_tasks: # The date filter is ignored if the user hand-picks tasks
                 filtered_df = filtered_df[(filtered_df['Start'] <= end_filter) & (filtered_df['Finish'] >= start_filter)]
 
         fig = create_gantt_chart(filtered_df)
@@ -166,20 +150,14 @@ def show_project_view():
 # (No changes to functions below this line)
 def create_gantt_chart(df):
     fig = px.timeline(
-        df, x_start="Start", x_end="Finish", y="Task Description",
-        color="GanttColor",
+        df, x_start="Start", x_end="Finish", y="Task Description", color="GanttColor",
         color_discrete_map={
-            'Critical (In Progress)': '#E74C3C',
-            'Critical (Not Started)': '#CD5C5C',
-            'Critical (Complete)': '#F5B7B1',
-            'Non-Critical (In Progress)': '#3498DB',
-            'Non-Critical (Not Started)': '#4169E1',
-            'Non-Critical (Complete)': '#AED6F1',
+            'Critical (In Progress)': '#E74C3C', 'Critical (Not Started)': '#CD5C5C', 'Critical (Complete)': '#F5B7B1',
+            'Non-Critical (In Progress)': '#3498DB', 'Non-Critical (Not Started)': '#4169E1', 'Non-Critical (Complete)': '#AED6F1',
         },
         hover_data=["Task ID", "Duration", "Status", "On Critical Path?"]
     )
-    fig.update_layout(legend_title_text='Task Status')
-    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(legend_title_text='Task Status'); fig.update_yaxes(autorange="reversed")
     return fig
 
 def create_network_diagram(df):
