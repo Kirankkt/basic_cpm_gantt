@@ -2,7 +2,7 @@
 
 ![Streamlit](https://img.shields.io/badge/Built%20with-Streamlit-ff4b4b?logo=streamlit\&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Database-PostgreSQL-4169E1?logo=postgresql\&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green)
+
 
 A lightweight, web‑based Critical Path Method (CPM) and Gantt‑chart planner for
 construction (or any dependency‑heavy) projects.  Upload a CSV/Excel schedule,
