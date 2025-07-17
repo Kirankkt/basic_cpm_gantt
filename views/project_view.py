@@ -5,8 +5,7 @@ from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 import networkx as nx
-import re
-
+import re, unicodedata                     # NEW
 from database import (
     get_all_projects,
     get_project_data_from_db,
@@ -15,6 +14,31 @@ from database import (
 )
 from cpm_logic import calculate_cpm
 from utils import get_sample_data
+
+# ────────────────────────────────────────────────────────────────
+#  Helper functions (NEW)
+# ────────────────────────────────────────────────────────────────
+def _normalise_id(s: str) -> str:
+    """
+    Trim, fold unicode, replace fancy dashes with ASCII hyphen,
+    upper‑case the string. Empty/NaN → "".
+    """
+    if pd.isna(s):
+        return ""
+    s = unicodedata.normalize("NFKC", str(s)).strip().upper()
+    return s.replace("–", "-").replace("—", "-")
+
+
+def _check_for_dangling_preds(df: pd.DataFrame) -> set[str]:
+    """Return {predecessorID,…} tokens that are not in the Task ID column."""
+    task_ids = set(df["Task ID"])
+    dangling = {
+        _normalise_id(tok)
+        for preds in df["Predecessors"].dropna()
+        for tok in re.split(r"[,\s;]+", preds)
+        if _normalise_id(tok) and _normalise_id(tok) not in task_ids
+    }
+    return dangling
 
 
 # ────────────────────────────────────────────────────────────────
@@ -33,8 +57,10 @@ def show_project_view() -> None:
                 if uploaded.name.endswith(".csv")
                 else pd.read_excel(uploaded)
             )
-            new_id = import_df_to_db(df, project_name)
+            # NORMALISE IDs on import (NEW)
+            df["Task ID"] = df["Task ID"].apply(_normalise_id)
 
+            new_id = import_df_to_db(df, project_name)
             st.session_state.all_projects = get_all_projects()
             st.session_state.current_project_id = new_id
             st.session_state.project_df = get_project_data_from_db(new_id)
@@ -138,11 +164,19 @@ def show_project_view() -> None:
 
     with col_calc:
         if st.button("Calculate & Save Project Plan", type="primary"):
-            # Basic validation
-            if edited_df["Task ID"].isnull().any() or "" in edited_df["Task ID"].values:
-                st.error("Task ID cannot be empty.")
+            # ── Validation (NEW) ────────────────────────────────
+            edited_df["Task ID"] = edited_df["Task ID"].apply(_normalise_id)
+            dangling = _check_for_dangling_preds(edited_df)
+
+            if "" in edited_df["Task ID"].values:
+                st.error("Task ID cannot be empty.")
             elif edited_df["Task ID"].duplicated().any():
-                st.error("Duplicate Task IDs detected.")
+                st.error("Duplicate Task IDs detected.")
+            elif dangling:
+                st.error(
+                    "Predecessor ID(s) not found in the Task ID column: "
+                    + ", ".join(sorted(dangling))
+                )
             else:
                 try:
                     save_tasks_to_db(edited_df, st.session_state.current_project_id)
@@ -194,7 +228,6 @@ def show_project_view() -> None:
     gantt_df["Start"] = pd.to_datetime(start_date) + pd.to_timedelta(
         gantt_df["ES"] - 1, unit="D"
     )
-    # NEW: ensure at least one‑day span
     gantt_df["Finish"] = gantt_df["Start"] + pd.to_timedelta(
         gantt_df["Duration"], unit="D"
     )
@@ -234,14 +267,10 @@ def show_project_view() -> None:
             "Filter by Project Phase",
             options=sorted({t.split("-")[0] for t in gantt_df["Task ID"]}),
         )
-        # expand date picker window a bit
         buffer = timedelta(days=14)
         min_date = (gantt_df["Start"].min() - buffer).date()
         max_date = (gantt_df["Finish"].max() + buffer).date()
-        date_rng = st.date_input(
-            "Filter by Date Range",
-            value=(min_date, max_date),
-        )
+        date_rng = st.date_input("Filter by Date Range", value=(min_date, max_date))
 
     # ▸ Apply filters
     if sel_tasks:
@@ -293,14 +322,14 @@ def create_network_diagram(df: pd.DataFrame) -> go.Figure:
         G.add_node(row["Task ID"])
         if pd.notna(row["Predecessors"]) and row["Predecessors"]:
             preds = [
-                p.strip()
+                _normalise_id(p)
                 for p in re.split(r"[,\s;]+", str(row["Predecessors"]))
-                if p.strip()
+                if _normalise_id(p)
             ]
             for p_task in preds:
                 G.add_edge(p_task, row["Task ID"])
 
-    # Layout: try topological generations first
+    # Layout
     try:
         generations = list(nx.topological_generations(G))
         pos = {
@@ -308,7 +337,7 @@ def create_network_diagram(df: pd.DataFrame) -> go.Figure:
             for i, gen in enumerate(generations)
             for j, node in enumerate(gen)
         }
-    except nx.NetworkXUnfeasible:  # cyclic
+    except nx.NetworkXUnfeasible:
         st.warning("Cyclic dependency detected!")
         pos = nx.spring_layout(G, seed=42)
 
@@ -340,11 +369,11 @@ def create_network_diagram(df: pd.DataFrame) -> go.Figure:
         else:
             colors.append("grey")
             hovers.append(f"Task: {node} (Missing)")
+
     node_trace.marker.color = colors
     node_trace.hovertext = hovers
     node_trace.textfont = dict(color="white", size=10)
 
-    # Edges as arrows
     arrows = []
     standoff = 12 if is_large else 20
     for a, b in G.edges():
@@ -374,9 +403,7 @@ def create_network_diagram(df: pd.DataFrame) -> go.Figure:
             showlegend=False,
             hovermode="closest",
             margin=dict(t=40, b=20, l=5, r=5),
-            xaxis=dict(
-                title="Project Sequence Level", showgrid=False, zeroline=False
-            ),
+            xaxis=dict(title="Project Sequence Level", showgrid=False, zeroline=False),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
             annotations=arrows,
         ),
