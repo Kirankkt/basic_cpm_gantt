@@ -1,4 +1,7 @@
 # app.py
+import os
+os.environ["ST_DISABLE_WATCHDOG"] = "true"   # avoid inotify limit in containers
+
 import streamlit as st
 
 from database import initialize_database
