@@ -4,7 +4,8 @@ import pandas as pd
 from datetime import date
 from sqlalchemy import text
 
-from database import engine, _normalise_id   # _normalise_id exists in project_view
+from database import engine
+from views.project_view import _normalise_id   # correct location
 
 def show_checklist_view() -> None:
     st.set_page_config(page_title="Daily Checklist", layout="centered")
