@@ -1,28 +1,36 @@
+# app.py
 import streamlit as st
+
 from database import initialize_database
 from views.project_view import show_project_view
+from views.checklist_view import show_checklist_view   # ← NEW
 
-# --- 1. Set Page Configuration ---
-# This should be the first Streamlit command in your app.
+# ── 1. Page configuration (must be first Streamlit call) ─────────────
 st.set_page_config(
     page_title="Collaborative CPM Tool",
     page_icon="🏗️",
-    layout="wide"
+    layout="wide",
 )
 
-# --- 2. Initialize the Database ---
-# This function from database.py will run when the app starts.
-# It will create the 'projects.db' file and the necessary tables if they don't exist.
+# ── 2. Initialise the database ───────────────────────────────────────
 initialize_database()
 
-# --- 3. Display App Title and Welcome Message ---
-st.title("🏗️ Collaborative Renovation Project Hub I")
-st.markdown("""
-Welcome! This is your central hub for managing the renovation project.
-All data is **saved to a persistent database** when you press the calculate button.
-""")
+# ── 3. Sidebar navigation ────────────────────────────────────────────
+PAGES = {
+    "Planner Dashboard": show_project_view,
+    "Daily Checklist":   show_checklist_view,   # ← NEW entry
+}
 
-# --- 4. Show the Main Project Interface ---
-# We call the function from our new view file to render the page content.
-# This keeps our main app file clean and organized.
-show_project_view()
+selection = st.sidebar.radio("Go to page:", list(PAGES))
+st.sidebar.divider()
+
+# ── 4. Header shown on every page ────────────────────────────────────
+st.title("🏗️ Collaborative Renovation Project Hub")
+st.markdown(
+    "Welcome! All data is **saved to the persistent database** when you press "
+    "the *Calculate & Save* button (or tick items in the daily checklist)."
+)
+st.divider()
+
+# ── 5. Render the selected view ──────────────────────────────────────
+PAGES[selection]()
