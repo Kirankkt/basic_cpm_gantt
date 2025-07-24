@@ -29,20 +29,24 @@ engine = create_engine(DB_URL, future=True, echo=False)
 
 # ── schema bootstrap / patch ─────────────────────────────────────────────────
 def initialize_database() -> None:
-    """Create or patch tables so the rest of the app can assume columns exist."""
-    with engine.begin() as conn:  # handles COMMIT/ROLLBACK automatically
-        # --- projects --------------------------------------------------------
+    with engine.begin() as conn:
+        # 1 Ensure projects table
         conn.execute(
             text(
                 """
-            CREATE TABLE IF NOT EXISTS projects (
-                id          SERIAL PRIMARY KEY,
-                name        TEXT NOT NULL UNIQUE,
-                start_date  DATE            -- may be NULL until user picks one
-            );
-            """
+                CREATE TABLE IF NOT EXISTS projects (
+                    id          SERIAL PRIMARY KEY,
+                    name        TEXT    NOT NULL UNIQUE,
+                    start_date  DATE    DEFAULT CURRENT_DATE  -- ← NEW
+                );
+                """
             )
         )
+        # 2 Add column if the table predates it
+        cols = {c["name"] for c in inspect(conn).get_columns("projects")}
+        if "start_date" not in cols:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN start_date DATE"))
+
 
         # --- tasks -----------------------------------------------------------
         conn.execute(
