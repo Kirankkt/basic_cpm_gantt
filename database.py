@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List   # ← ADD THIS
+import pandas as pd
 import os
 import streamlit as st
 from sqlalchemy import create_engine, inspect, text
