@@ -8,24 +8,19 @@ tasks    : id, project_id, task_id_str, description, predecessors,
            duration, status, es, ef
 """
 
+import os, streamlit as st
 from pathlib import Path
-from typing import Dict
+from sqlalchemy import create_engine
 
-import pandas as pd
-from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.engine import Engine
-
-# ── engine ────────────────────────────────────────────────────────────────────
+# 1) Streamlit-secrets  2) env var  3) fallback SQLite
 DB_URL = (
-    # 1️⃣ try Streamlit secrets →
-    "postgresql+psycopg2://"
-    + Path("/etc/secrets/db_url").read_text(strip=True)
-    if Path("/etc/secrets/db_url").exists()
-    # 2️⃣ else fall back to local SQLite
-    else f"sqlite:///{Path(__file__).parent / 'projects.db'}"
+    st.secrets.get("database", {}).get("url")
+    or os.getenv("DB_URL")
+    or f"sqlite:///{Path(__file__).parent / 'projects.db'}"
 )
 
-engine: Engine = create_engine(DB_URL, future=True, echo=False)
+engine = create_engine(DB_URL, future=True, echo=False)
+
 
 # ── schema bootstrap / patch ─────────────────────────────────────────────────
 def initialize_database() -> None:
