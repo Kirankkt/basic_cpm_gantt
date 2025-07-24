@@ -2,6 +2,8 @@
 Planner dashboard: upload → edit → calculate CPM / Gantt / network diagram.
 """
 
+from __future__ import annotations
+
 from datetime import date, timedelta
 from typing import List
 
@@ -14,7 +16,7 @@ import streamlit as st
 from sqlalchemy import text
 
 from cpm_logic import calculate_cpm
-from database import (
+from database import (  # local helpers
     engine,
     get_all_projects,
     get_project_data_from_db,
@@ -23,38 +25,40 @@ from database import (
 )
 from utils import get_sample_data
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 def show_project_view() -> None:
-    # ── callbacks ────────────────────────────────────────────────────────────
+    # ── internal callbacks ───────────────────────────────────────────────────
     def _process_uploaded_file() -> None:
         up = st.session_state.get("file_uploader")
         if not up:
             return
         try:
-            project_name = up.name.rsplit(".", 1)[0]
+            name = up.name.rsplit(".", 1)[0]
             df = pd.read_csv(up) if up.name.endswith(".csv") else pd.read_excel(up)
-            new_id = import_df_to_db(df, project_name)
+            pid = import_df_to_db(df, name)
+
             st.session_state.update(
                 {
                     "all_projects": get_all_projects(),
-                    "current_project_id": new_id,
-                    "project_df": get_project_data_from_db(new_id),
+                    "current_project_id": pid,
+                    "project_df": get_project_data_from_db(pid),
                     "cpm_results": None,
                 }
             )
-            st.success(f"Imported **{project_name}**")
+            st.success(f"Imported **{name}**")
         except Exception as exc:  # pylint: disable=broad-except
             st.error(f"Upload failed: {exc}")
 
     def _switch_project() -> None:
-        name = st.session_state.project_selector
-        if name:
-            pid = st.session_state.all_projects[name]
+        sel = st.session_state.project_selector
+        if sel:
+            pid = st.session_state.all_projects[sel]
             st.session_state.current_project_id = pid
             st.session_state.project_df = get_project_data_from_db(pid)
             st.session_state.cpm_results = None
 
-    # ── initial session state ────────────────────────────────────────────────
+    # ── session bootstrap ────────────────────────────────────────────────────
     st.session_state.setdefault("all_projects", get_all_projects())
     st.session_state.setdefault(
         "current_project_id",
@@ -65,10 +69,10 @@ def show_project_view() -> None:
     )
     st.session_state.setdefault("cpm_results", None)
 
-    # ── sidebar nav handled in app.py ────────────────────────────────────────
+    # ── UI – project picker & upload ─────────────────────────────────────────
     st.header("📂 Project Selection & Setup")
 
-    names: List[str] = list(st.session_state.all_projects.keys())
+    proj_names: List[str] = list(st.session_state.all_projects.keys())
     cur_name = next(
         (n for n, pid in st.session_state.all_projects.items()
          if pid == st.session_state.current_project_id),
@@ -76,20 +80,18 @@ def show_project_view() -> None:
     )
     st.selectbox(
         "Select Project",
-        names,
-        index=names.index(cur_name) if cur_name in names else 0,
+        proj_names,
+        index=proj_names.index(cur_name) if cur_name in proj_names else 0,
         key="project_selector",
         on_change=_switch_project,
     )
 
-    with st.expander("Import New Project / Load Sample"):
+    with st.expander("Import new project / Load sample"):
         st.file_uploader(
-            "Upload CSV / Excel",
-            type=["csv", "xlsx"],
-            key="file_uploader",
-            on_change=_process_uploaded_file,
+            "Upload CSV / Excel", type=["csv", "xlsx"],
+            key="file_uploader", on_change=_process_uploaded_file,
         )
-        if st.button("Load Sample Data"):
+        if st.button("Load sample data"):
             pid = import_df_to_db(get_sample_data(), "Demo Project")
             st.session_state.update(
                 {
@@ -101,20 +103,18 @@ def show_project_view() -> None:
             )
             st.rerun()
 
-    ## ── project calendar start date ──────────────────────────────────────────
+    # ── project calendar start-date (stored in DB) ───────────────────────────
     with engine.begin() as conn:
         cur_start = conn.execute(
             text("SELECT start_date FROM projects WHERE id=:pid"),
             {"pid": st.session_state.current_project_id},
         ).scalar()
-    
+
     picked_date = st.date_input(
         "Project calendar **start date**",
-        value=cur_start or date.today(),       # default if null
+        value=cur_start or date.today(),
         key="start_date_picker",
     )
-    
-    # persist when user changes it
     if picked_date != cur_start:
         with engine.begin() as conn:
             conn.execute(
@@ -122,40 +122,38 @@ def show_project_view() -> None:
                 {"d": picked_date, "pid": st.session_state.current_project_id},
             )
 
-
     st.divider()
 
-    # ── task editor ──────────────────────────────────────────────────────────
+    # ── task grid editor ─────────────────────────────────────────────────────
     st.header("📝 Task Planning & Status")
-
     if st.session_state.project_df.empty:
         st.info("No tasks yet – upload a schedule above.")
         return
 
-    column_cfg = {
-        "Status": st.column_config.SelectboxColumn(
-            "Status",
-            options=["Not Started", "In Progress", "Complete"],
-            required=True,
-        )
-    }
     edited_df = st.data_editor(
         st.session_state.project_df,
-        column_config=column_cfg,
+        column_config={
+            "Status": st.column_config.SelectboxColumn(
+                "Status",
+                options=["Not Started", "In Progress", "Complete"],
+                required=True,
+            )
+        },
         num_rows="dynamic",
         use_container_width=True,
     )
 
     col_calc, col_export = st.columns([1.5, 1])
+    # ── Calculate & save -----------------------------------------------------
     with col_calc:
         if st.button("Calculate & Save", type="primary"):
-            # validation
+            # basic validation
             if edited_df["Task ID"].isna().any() or (edited_df["Task ID"] == "").any():
                 st.error("Task ID cannot be empty.")
                 st.stop()
-            dupes = edited_df["Task ID"].str.strip().str.upper().duplicated()
-            if dupes.any():
-                st.error(f"Duplicate Task ID: {edited_df['Task ID'][dupes].iloc[0]}")
+            dup = edited_df["Task ID"].str.strip().str.upper().duplicated()
+            if dup.any():
+                st.error(f"Duplicate Task ID: {edited_df['Task ID'][dup].iloc[0]}")
                 st.stop()
 
             try:
@@ -164,21 +162,18 @@ def show_project_view() -> None:
                 st.error(str(exc))
                 st.stop()
 
-                        # ── merge CPM data back (and normalise column names) ─────────────────────
-            merged = edited_df.merge(
-                cpm_df[["Task ID", "ES", "EF"]],
-                on="Task ID",
-                how="left",
+            # merge CPM columns & normalise names (lower-case for DB)
+            merged = (
+                edited_df.merge(cpm_df[["Task ID", "ES", "EF"]], on="Task ID", how="left")
+                .rename(columns={"ES": "es", "EF": "ef"})
             )
-            
-            # rename to lower-case so DB + checklist use the same names
-            merged = merged.rename(columns={"ES": "es", "EF": "ef"})
 
             save_tasks_to_db(merged, st.session_state.current_project_id)
             st.session_state.project_df = merged
             st.session_state.cpm_results = cpm_df
             st.success("Saved 🚀")
 
+    # export
     with col_export:
         st.download_button(
             "Export CSV",
@@ -187,7 +182,7 @@ def show_project_view() -> None:
             "text/csv",
         )
 
-    # ── results area ─────────────────────────────────────────────────────────
+    # ── Results (only after CPM run) ─────────────────────────────────────────
     if st.session_state.cpm_results is None:
         return
 
@@ -199,36 +194,34 @@ def show_project_view() -> None:
 
     # overall progress
     with st.container(border=True):
-        tot = cpm_df["Duration"].sum()
-        done = cpm_df.loc[cpm_df["Status"] == "Complete", "Duration"].sum()
-        pct = done / tot if tot else 0
+        total = cpm_df["Duration"].sum()
+        finished = cpm_df.loc[cpm_df["Status"] == "Complete", "Duration"].sum()
+        pct = finished / total if total else 0
         st.markdown("#### Overall progress")
         st.progress(pct, text=f"{pct:.0%}")
         a, b = st.columns(2)
-        a.metric("Days done", done, f"of {tot}")
-        b.metric(
-            "Tasks done",
-            f"{(cpm_df['Status'] == 'Complete').sum()}",
-            f"of {len(cpm_df)}",
-        )
+        a.metric("Days complete", finished, f"of {total}")
+        b.metric("Tasks complete",
+                 int((cpm_df["Status"] == "Complete").sum()),
+                 f"of {len(cpm_df)}",
+                 )
 
-    # build Gantt DF with real dates
+    # Gantt with real dates
     gdf = cpm_df.copy()
     gdf["Start"] = pd.to_datetime(picked_date) + pd.to_timedelta(gdf["ES"] - 1, unit="D")
     gdf["Finish"] = gdf["Start"] + pd.to_timedelta(gdf["Duration"], unit="D")
 
-    def _gcolor(row):
-        crit = row["On Critical Path?"] == "Yes"
-        return (
-            "Critical" if crit else "Non-critical"
-        ) + f" ({row['Status']})"
+    def _gcolour(r):
+        base = "Critical" if r["On Critical Path?"] == "Yes" else "Non-critical"
+        return f"{base} ({r['Status']})"
 
-    gdf["GanttColor"] = gdf.apply(_gcolor, axis=1)
+    gdf["GanttColour"] = gdf.apply(_gcolour, axis=1)
 
     st.plotly_chart(
         px.timeline(
-            gdf, x_start="Start", x_end="Finish", y="Task Description",
-            color="GanttColor",
+            gdf,
+            x_start="Start", x_end="Finish", y="Task Description",
+            color="GanttColour",
             hover_data=["Task ID", "Duration", "Status", "On Critical Path?"],
         ).update_yaxes(autorange="reversed"),
         use_container_width=True,
@@ -238,31 +231,32 @@ def show_project_view() -> None:
     st.plotly_chart(_create_network_diagram(cpm_df), use_container_width=True)
 
 
-# ── network helper ───────────────────────────────────────────────────────────
+# ────────────────────────────── helpers ──────────────────────────────────────
 def _create_network_diagram(df: pd.DataFrame) -> go.Figure:
+    """Activity-on-node diagram (red = critical)."""
     G = nx.DiGraph()
-    for _, row in df.iterrows():
-        G.add_node(row["Task ID"])
-        if pd.notna(row["Predecessors"]) and row["Predecessors"]:
-            preds = [
-                p.strip() for p in re.split(r"[,\s;]+", str(row["Predecessors"])) if p
-            ]
-            G.add_edges_from([(p, row["Task ID"]) for p in preds])
+    for _, r in df.iterrows():
+        G.add_node(r["Task ID"])
+        if pd.notna(r["Predecessors"]) and r["Predecessors"]:
+            preds = [p.strip() for p in re.split(r"[,\s;]+", str(r["Predecessors"])) if p]
+            G.add_edges_from([(p, r["Task ID"]) for p in preds])
 
+    # layout
     try:
         layers = list(nx.topological_generations(G))
-        pos = {n: (i, -(layers[i].index(n))) for i in range(len(layers)) for n in layers[i]}
-    except nx.NetworkXUnfeasible:
+        pos = {n: (i, -layers[i].index(n)) for i in range(len(layers)) for n in layers[i]}
+    except nx.NetworkXUnfeasible:  # cyclic
         pos = nx.spring_layout(G, seed=42)
 
+    # nodes
     node_trace = go.Scatter(
         x=[pos[n][0] for n in G],
         y=[pos[n][1] for n in G],
         mode="markers+text",
-        text=[n for n in G],
+        text=list(G.nodes),
         textposition="middle center",
-        hoverinfo="text",
         marker=dict(size=24, line=dict(width=1, color="black")),
+        hoverinfo="text",
     )
 
     colours, htxt = [], []
@@ -277,16 +271,18 @@ def _create_network_diagram(df: pd.DataFrame) -> go.Figure:
             htxt.append(
                 f"{n}<br>{row['Task Description'].iloc[0]}<br>Dur {row['Duration'].iloc[0]}"
             )
+
     node_trace.marker.color = colours
     node_trace.hovertext = htxt
     node_trace.textfont = dict(color="white", size=10)
 
+    # arrows
     arrows = [
         go.layout.Annotation(
             ax=pos[a][0], ay=pos[a][1], x=pos[b][0], y=pos[b][1],
             xref="x", yref="y", axref="x", ayref="y",
-            showarrow=True, arrowhead=2, arrowwidth=1, arrowsize=1.5, arrowcolor="#888",
-            standoff=12,
+            showarrow=True, arrowhead=2, arrowsize=1.5, arrowwidth=1,
+            arrowcolor="#888", standoff=12,
         )
         for a, b in G.edges()
     ]
