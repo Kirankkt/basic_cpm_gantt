@@ -164,12 +164,16 @@ def show_project_view() -> None:
                 st.error(str(exc))
                 st.stop()
 
-            # merge computed cols back
+                        # ── merge CPM data back (and normalise column names) ─────────────────────
             merged = edited_df.merge(
                 cpm_df[["Task ID", "ES", "EF"]],
                 on="Task ID",
                 how="left",
             )
+            
+            # rename to lower-case so DB + checklist use the same names
+            merged = merged.rename(columns={"ES": "es", "EF": "ef"})
+
             save_tasks_to_db(merged, st.session_state.current_project_id)
             st.session_state.project_df = merged
             st.session_state.cpm_results = cpm_df
