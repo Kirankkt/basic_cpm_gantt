@@ -101,33 +101,27 @@ def show_project_view() -> None:
             )
             st.rerun()
 
-    # ── project calendar start date ──────────────────────────────────────────
+    ## ── project calendar start date ──────────────────────────────────────────
     with engine.begin() as conn:
         cur_start = conn.execute(
             text("SELECT start_date FROM projects WHERE id=:pid"),
             {"pid": st.session_state.current_project_id},
         ).scalar()
+    
     picked_date = st.date_input(
         "Project calendar **start date**",
-        value=cur_start or date.today(),
+        value=cur_start or date.today(),       # default if null
         key="start_date_picker",
     )
-    # project_view.py  (right after st.date_input)
-    if start_date != cur_start:
-        with engine.begin() as conn:
-            conn.execute(
-                text("UPDATE projects SET start_date=:d WHERE id=:pid"),
-                {"d": start_date, "pid": st.session_state.current_project_id},
-            )
-
-
-    # persist when changed
+    
+    # persist when user changes it
     if picked_date != cur_start:
         with engine.begin() as conn:
             conn.execute(
                 text("UPDATE projects SET start_date=:d WHERE id=:pid"),
                 {"d": picked_date, "pid": st.session_state.current_project_id},
             )
+
 
     st.divider()
 
