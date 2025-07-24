@@ -8,9 +8,13 @@ tasks    : id, project_id, task_id_str, description, predecessors,
            duration, status, es, ef
 """
 
-import os, streamlit as st
+from __future__ import annotations
+
 from pathlib import Path
-from sqlalchemy import create_engine
+from typing import Dict, List   # ← ADD THIS
+import os
+import streamlit as st
+from sqlalchemy import create_engine, inspect, text
 
 # 1) Streamlit-secrets  2) env var  3) fallback SQLite
 DB_URL = (
