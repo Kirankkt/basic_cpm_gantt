@@ -125,15 +125,19 @@ def show_project_view() -> None:
     st.divider()
 
     # ── editable task grid ─────────────────────────────────────────────────
+    # ── task editor ──────────────────────────────────────────────────────────
     st.header("📝 Task Planning & Status")
-
+    
     if st.session_state.project_df.empty:
         st.info("No tasks yet – upload a schedule above.")
         return
-
+    
+    # ── FIX: use keyword args only ───────────────────────────────────────────
     column_cfg = {
         "Status": st.column_config.SelectboxColumn(
-            "Status", ["Not Started", "In Progress", "Complete"], required=True
+            label="Status",
+            options=["Not Started", "In Progress", "Complete"],
+            required=True,
         )
     }
     edited_df = st.data_editor(
@@ -142,6 +146,7 @@ def show_project_view() -> None:
         num_rows="dynamic",
         use_container_width=True,
     )
+
 
     col_calc, col_export = st.columns([1.5, 1])
 
