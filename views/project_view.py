@@ -144,34 +144,39 @@ def show_project_view() -> None:
     )
 
     col_calc, col_export = st.columns([1.5, 1])
-    # ── Calculate & save -----------------------------------------------------
+        # ── Calculate & save -----------------------------------------------------
     with col_calc:
         if st.button("Calculate & Save", type="primary"):
-            # basic validation
-            if edited_df["Task ID"].isna().any() or (edited_df["Task ID"] == "").any():
-                st.error("Task ID cannot be empty.")
-                st.stop()
-            dup = edited_df["Task ID"].str.strip().str.upper().duplicated()
-            if dup.any():
-                st.error(f"Duplicate Task ID: {edited_df['Task ID'][dup].iloc[0]}")
-                st.stop()
+            # validation checks …
+            …
 
+            # fresh CPM calculations
             try:
                 cpm_df = calculate_cpm(edited_df.copy())
             except ValueError as exc:
                 st.error(str(exc))
                 st.stop()
 
-            # merge CPM columns & normalise names (lower-case for DB)
+            # ▸▸▸ 1️⃣  DROP any stale ES / EF columns that might already exist
+            edited_clean = edited_df.drop(columns=["ES", "EF", "es", "ef"],
+                                          errors="ignore")
+
+            # ▸▸▸ 2️⃣  MERGE the BRAND-NEW ES / EF
             merged = (
-                edited_df.merge(cpm_df[["Task ID", "ES", "EF"]], on="Task ID", how="left")
-                .rename(columns={"ES": "es", "EF": "ef"})
+                edited_clean.merge(
+                    cpm_df[["Task ID", "ES", "EF"]], on="Task ID", how="left"
+                )
+                .rename(columns={"ES": "es", "EF": "ef"})        # lower-case for DB
             )
 
+            # ▸▸▸ 3️⃣  SAVE to DB
             save_tasks_to_db(merged, st.session_state.current_project_id)
+
+            # refresh session-state
             st.session_state.project_df = merged
             st.session_state.cpm_results = cpm_df
             st.success("Saved 🚀")
+
 
     # export
     with col_export:
