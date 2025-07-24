@@ -1,138 +1,159 @@
-# database.py
-import os
-import pandas as pd
-import streamlit as st
-from sqlalchemy import create_engine, inspect, text
+"""
+Database helpers (PostgreSQL or SQLite fallback).
 
-# ── DATABASE SETUP ──────────────────────────────────────────────
+Tables
+------
+projects : id, name, start_date
+tasks    : id, project_id, task_id_str, description, predecessors,
+           duration, status, es, ef
+"""
+
+from pathlib import Path
+from typing import Dict
+
+import pandas as pd
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Engine
+
+# ── engine ────────────────────────────────────────────────────────────────────
 DB_URL = (
-    st.secrets["database"]["url"]          # Streamlit Cloud / secrets.toml
-    if "database" in st.secrets
-    else os.getenv("DATABASE_URL")         # fallback for local dev
+    # 1️⃣ try Streamlit secrets →
+    "postgresql+psycopg2://"
+    + Path("/etc/secrets/db_url").read_text(strip=True)
+    if Path("/etc/secrets/db_url").exists()
+    # 2️⃣ else fall back to local SQLite
+    else f"sqlite:///{Path(__file__).parent / 'projects.db'}"
 )
 
-if DB_URL is None:
-    raise RuntimeError(
-        "Database URL not found. "
-        "Add it to .streamlit/secrets.toml or set the DATABASE_URL env‑var."
-    )
+engine: Engine = create_engine(DB_URL, future=True, echo=False)
 
-engine = create_engine(DB_URL, pool_pre_ping=True, echo=False)
-
-# ── INITIALISATION ──────────────────────────────────────────────
+# ── schema bootstrap / patch ─────────────────────────────────────────────────
 def initialize_database() -> None:
-    """Create or patch tables inside Postgres."""
-    with engine.begin() as conn:
-
-        # ── Clean up orphaned sequences (once) ──────────────────────
-        # projects
-        if not inspect(conn).has_table("projects"):
-            conn.execute(text("DROP SEQUENCE IF EXISTS projects_id_seq CASCADE"))
-        # tasks
-        if not inspect(conn).has_table("tasks"):
-            conn.execute(text("DROP SEQUENCE IF EXISTS tasks_id_seq CASCADE"))
-
-        # ── Projects table ───────────────────────────────────────────
-        conn.execute(text("""
+    """Create or patch tables so the rest of the app can assume columns exist."""
+    with engine.begin() as conn:  # handles COMMIT/ROLLBACK automatically
+        # --- projects --------------------------------------------------------
+        conn.execute(
+            text(
+                """
             CREATE TABLE IF NOT EXISTS projects (
-                id   SERIAL PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE
+                id          SERIAL PRIMARY KEY,
+                name        TEXT NOT NULL UNIQUE,
+                start_date  DATE            -- may be NULL until user picks one
             );
-        """))
+            """
+            )
+        )
 
-        # ── Tasks table ──────────────────────────────────────────────
-        conn.execute(text("""
+        # --- tasks -----------------------------------------------------------
+        conn.execute(
+            text(
+                """
             CREATE TABLE IF NOT EXISTS tasks (
-                id           SERIAL PRIMARY KEY,
-                project_id   INTEGER NOT NULL REFERENCES projects(id)
-                               ON DELETE CASCADE,
-                task_id_str  TEXT NOT NULL,
-                description  TEXT NOT NULL,
-                predecessors TEXT,
-                duration     INTEGER NOT NULL,
-                status       TEXT DEFAULT 'Not Started'
+                id            SERIAL PRIMARY KEY,
+                project_id    INTEGER NOT NULL REFERENCES projects(id),
+                task_id_str   TEXT    NOT NULL,
+                description   TEXT    NOT NULL,
+                predecessors  TEXT,
+                duration      INTEGER NOT NULL,
+                status        TEXT    DEFAULT 'Not Started',
+                es            INTEGER,          -- Early Start  (1-based)
+                ef            INTEGER           -- Early Finish
             );
-        """))
+            """
+            )
+        )
 
-        # add status column if the table predates it
-        cols = [c["name"] for c in inspect(conn).get_columns("tasks")]
-        if "status" not in cols:
-            conn.execute(text(
-                "ALTER TABLE tasks ADD COLUMN status TEXT DEFAULT 'Not Started';"
-            ))
+        # patch columns if legacy installs miss them
+        inspector = inspect(conn)
+        task_cols = {c["name"] for c in inspector.get_columns("tasks")}
+        for missing, ddl in [
+            ("status", "ALTER TABLE tasks ADD COLUMN status TEXT DEFAULT 'Not Started'"),
+            ("es", "ALTER TABLE tasks ADD COLUMN es INTEGER"),
+            ("ef", "ALTER TABLE tasks ADD COLUMN ef INTEGER"),
+        ]:
+            if missing not in task_cols:
+                conn.execute(text(ddl))
 
-# ── QUERY HELPERS ───────────────────────────────────────────────
-def get_all_projects() -> dict[str, int]:
+
+# ── convenience helpers ------------------------------------------------------
+def get_all_projects() -> Dict[str, int]:
+    """Return {project_name: id} sorted by name."""
     with engine.connect() as conn:
-        rows = conn.execute(text(
-            "SELECT id, name FROM projects ORDER BY name"
-        ))
+        rows = conn.execute(text("SELECT id, name FROM projects ORDER BY name"))
         return {name: pid for pid, name in rows}
 
-def get_project_data_from_db(project_id: int) -> pd.DataFrame:
-    if project_id is None:
+
+def get_project_data_from_db(project_id: int | None) -> pd.DataFrame:
+    if not project_id:
         return pd.DataFrame()
-    q = text("""
+    query = text(
+        """
         SELECT task_id_str  AS "Task ID",
                description  AS "Task Description",
                predecessors AS "Predecessors",
                duration     AS "Duration",
-               status       AS "Status"
+               status       AS "Status",
+               es           AS "ES",
+               ef           AS "EF"
         FROM tasks
         WHERE project_id = :pid
-    """)
-    with engine.connect() as conn:
-        return pd.read_sql(q, conn, params={"pid": project_id})
+        ORDER BY id
+        """
+    )
+    return pd.read_sql(query, engine, params={"pid": project_id})
 
-# ── IMPORT / SAVE OPERATIONS ────────────────────────────────────
+
 def import_df_to_db(df: pd.DataFrame, project_name: str) -> int:
+    """Create project (or replace its tasks) from uploaded CSV/XLSX."""
     with engine.begin() as conn:
-        pid = conn.execute(
-            text("""
-                INSERT INTO projects (name)
-                VALUES (:n)
-                ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-                RETURNING id
-            """),
+        res = conn.execute(
+            text("SELECT id FROM projects WHERE name = :n"), {"n": project_name}
+        ).first()
+        project_id = res[0] if res else conn.execute(
+            text("INSERT INTO projects (name) VALUES (:n) RETURNING id"),
             {"n": project_name},
         ).scalar_one()
 
-        df_copy = df.copy()
-        if "Status" not in df_copy.columns:
-            df_copy["Status"] = "Not Started"
+        # normalise columns
+        upload = df.copy()
+        if "Status" not in upload:
+            upload["Status"] = "Not Started"
+        upload = upload.rename(
+            columns={
+                "Task ID": "task_id_str",
+                "Task Description": "description",
+                "Predecessors": "predecessors",
+                "Duration": "duration",
+                "Status": "status",
+                "ES": "es",
+                "EF": "ef",
+            }
+        )
+        upload["project_id"] = project_id
+        upload[
+            ["project_id", "task_id_str", "description", "predecessors",
+             "duration", "status", "es", "ef"]
+        ].to_sql("tasks", conn, if_exists="replace", index=False)
+    return project_id
 
-        df_copy["project_id"] = pid
-        df_copy = df_copy.rename(columns={
-            "Task ID":         "task_id_str",
-            "Task Description":"description",
-            "Predecessors":    "predecessors",
-            "Duration":        "duration",
-            "Status":          "status"
-        })[
-            ["project_id", "task_id_str", "description",
-             "predecessors", "duration", "status"]
-        ]
-
-        conn.execute(text("DELETE FROM tasks WHERE project_id = :pid"),
-                     {"pid": pid})
-        df_copy.to_sql("tasks", conn, if_exists="append", index=False)
-    return pid
 
 def save_tasks_to_db(df: pd.DataFrame, project_id: int) -> None:
-    df_copy = df.copy()
-    df_copy["project_id"] = project_id
-    df_copy = df_copy.rename(columns={
-        "Task ID":         "task_id_str",
-        "Task Description":"description",
-        "Predecessors":    "predecessors",
-        "Duration":        "duration",
-        "Status":          "status"
-    })[
-        ["project_id", "task_id_str", "description",
-         "predecessors", "duration", "status"]
-    ]
-
+    """Write the (edited + CPM-augmented) DataFrame back to DB."""
+    upload = df.rename(
+        columns={
+            "Task ID": "task_id_str",
+            "Task Description": "description",
+            "Predecessors": "predecessors",
+            "Duration": "duration",
+            "Status": "status",
+            "ES": "es",
+            "EF": "ef",
+        }
+    )
+    upload["project_id"] = project_id
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM tasks WHERE project_id = :pid"),
-                     {"pid": project_id})
-        df_copy.to_sql("tasks", conn, if_exists="append", index=False)
+        conn.execute(text("DELETE FROM tasks WHERE project_id = :pid"), {"pid": project_id})
+        upload[
+            ["project_id", "task_id_str", "description", "predecessors",
+             "duration", "status", "es", "ef"]
+        ].to_sql("tasks", conn, if_exists="append", index=False)
