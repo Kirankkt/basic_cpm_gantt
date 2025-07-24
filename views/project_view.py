@@ -112,6 +112,14 @@ def show_project_view() -> None:
         value=cur_start or date.today(),
         key="start_date_picker",
     )
+    # project_view.py  (right after st.date_input)
+    if start_date != cur_start:
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE projects SET start_date=:d WHERE id=:pid"),
+                {"d": start_date, "pid": st.session_state.current_project_id},
+            )
+
 
     # persist when changed
     if picked_date != cur_start:
