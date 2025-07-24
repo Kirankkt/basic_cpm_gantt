@@ -143,7 +143,7 @@ def import_df_to_db(df: pd.DataFrame, project_name: str) -> int:
 
 
 def save_tasks_to_db(df: pd.DataFrame, project_id: int) -> None:
-    """Persist the edited + CPM-augmented DataFrame."""
+    """Persist the edited + CPM-augmented DataFrame (tolerant of missing es/ef)."""
     up = df.rename(
         columns={
             "Task ID": "task_id_str",
@@ -154,11 +154,18 @@ def save_tasks_to_db(df: pd.DataFrame, project_id: int) -> None:
             "ES": "es",
             "EF": "ef",
         }
-    )
+    ).copy()
+
+    # graceful fallback: ensure es / ef columns exist (NULL → shows as blank)
+    for col in ("es", "ef"):
+        if col not in up:
+            up[col] = pd.NA
+
     up["project_id"] = project_id
 
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM tasks WHERE project_id = :pid"), {"pid": project_id})
+        conn.execute(text("DELETE FROM tasks WHERE project_id = :pid"),
+                     {"pid": project_id})
         up[
             ["project_id", "task_id_str", "description", "predecessors",
              "duration", "status", "es", "ef"]
